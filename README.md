@@ -1,81 +1,52 @@
 # 1BRC: One Billion Row Challenge in Python
 
-Python implementation of Gunnar's 1 billion row challenge:
-- https://www.morling.dev/blog/one-billion-row-challenge
-- https://github.com/gunnarmorling/1brc
 
-## Creating the measurements file with 1B rows
+## How to create your input files
 
-First install the Python requirements:
+### 1) Create your Python virtual environment and activate it
+
 ```shell
-python3 -m pip install -r requirements.txt
+strictly-come-coding % python3 -m venv venv
+strictly-come-coding % . venv/bin/activate
+(venv) strictly-come-coding % which pip
+/Users/bryan.williams/development/strictly-come-coding/venv/bin/pip
 ```
 
-The script `createMeasurements.py` will create the measurement file:
-```
-usage: createMeasurements.py [-h] [-o OUTPUT] [-r RECORDS]
 
-Create measurement file
+### 2) Install the requirements for the creator / reference results generator
 
-optional arguments:
-  -h, --help            show this help message and exit
-  -o OUTPUT, --output OUTPUT
-                        Measurement file name (default is "measurements.txt")
-  -r RECORDS, --records RECORDS
-                        Number of records to create (default is 1_000_000_000)
+```shell
+(venv) strictly-come-coding % pip install -r requirements.txt
+Collecting numpy>=1.24.2 (from -r requirements.txt (line 1))
+  Downloading numpy-2.1.1-cp312-cp312-macosx_14_0_arm64.whl.metadata (60 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 60.9/60.9 kB 4.0 MB/s eta 0:00:00
+Collecting polars>=0.20.0 (from -r requirements.txt (line 2))
+  Downloading polars-1.6.0-cp38-abi3-macosx_11_0_arm64.whl.metadata (14 kB)
+Collecting tqdm>=4.66.0 (from -r requirements.txt (line 3))
+  Using cached tqdm-4.66.5-py3-none-any.whl.metadata (57 kB)
+Downloading numpy-2.1.1-cp312-cp312-macosx_14_0_arm64.whl (5.1 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 5.1/5.1 MB 67.4 MB/s eta 0:00:00
+Downloading polars-1.6.0-cp38-abi3-macosx_11_0_arm64.whl (26.8 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 26.8/26.8 MB 94.5 MB/s eta 0:00:00
+Using cached tqdm-4.66.5-py3-none-any.whl (78 kB)
+Installing collected packages: tqdm, polars, numpy
+Successfully installed numpy-2.1.1 polars-1.6.0 tqdm-4.66.5
+
+[notice] A new release of pip is available: 24.0 -> 24.2
+[notice] To update, run: pip install --upgrade pip
 ```
 
-Example:
-```
-% python3 createMeasurements.py
+### 3) Generate an example input for with a seed of 1234
+
+```shell
+(venv) strictly-come-coding % python createMeasurements.py --seed 1234
+/Users/bryan.williams/development/strictly-come-coding/createMeasurements.py:426: DataOrientationWarning: Row orientation inferred during DataFrame construction. Explicitly specify the orientation by passing `orient="row"` to silence this warning.
+  stations = pl.DataFrame(STATIONS, ("names", "means"))
 Creating measurement file 'measurements.txt' with 1,000,000,000 measurements...
-100%|█████████████████████████████████████████| 100/100 [01:15<00:00,  1.32it/s]
-Created file 'measurements.txt' with 1,000,000,000 measurements in 75.86 seconds
-```
+100%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 100/100 [00:33<00:00,  2.97it/s]
+Created file 'measurements.txt' with 1,000,000,000 measurements in 33.75 seconds
+````
 
-Be patient as it can take more than a minute to have the file generated.
 
-Maybe as another challenge is to speed up the generation of the measurements file :slightly_smiling_face:
 
-## Performance (on a MacBook Pro M1 32GB)
-| Interpreter | Script | user | system | cpu | total |
-| ----------- | ------ | ---- | ------ | --- | ----- |
-| python3 | calculateAveragePolars.py | 77.84 | 3.64 | 703% | 11.585 |
-| pypy3 | calculateAveragePypy.py | ~~139.15~~<br>135.25 | ~~3.02s~~<br>2.92 | ~~699%~~<br>735% | ~~20.323~~<br>18.782 |
-| python3 | calculateAverageDuckDB.py | 186.78 | 4.21 | 806% | 23.673 |
-| pypy3 | calculateAverage.py | ~~284.90~~<br>242.89 | ~~9.12~~<br>6.28 | ~~749%~~<br>780% | ~~39.236~~<br>31.926 |
-| python3 | calculateAverage.py | ~~378.54~~<br>329.20 | ~~6.94~~<br>3.77 | ~~747%~~<br>793% | ~~51.544~~<br>41.941 |
-| python3 | calculateAveragePypy.py | ~~573.77~~<br>510.93 | ~~2.70~~<br>1.88 | ~~787%~~<br>793% | ~~73.170~~<br>64.660 |
 
-The script `calculateAveragePolars.py` was suggested by [Taufan](https://github.com/mtaufanr) on this [post](https://github.com/gunnarmorling/1brc/discussions/62#discussioncomment-8026402).
-
-The script `calculateAveragePypy.py` was created by [donalm](https://github.com/donalm), a +2x improved version of the initial script (`calculateAverage.py`) when running in pypy3, even capable of beating the implementation using [DuckDB](https://duckdb.org/) `calculateAverageDuckDB.py`.
-
-[Olivier Scalbert](https://github.com/oscalbert) has made a simple but incredible suggestion where performance increased by an average of 15% (table above has been updated), thank you :slightly_smiling_face:
-
-His suggestions were to change from:
-```python
-if measurement < result[location][0]:
-    result[location][0] = measurement
-if measurement > result[location][1]:
-    result[location][1] = measurement
-result[location][2] += measurement
-result[location][3] += 1
-```
-
-to:
-```python
-_result = result[location]
-if measurement < _result[0]:
-    _result[0] = measurement
-if measurement > _result[1]:
-    _result[1] = measurement
-_result[2] += measurement
-_result[3] += 1
-```
-
-Python can be surprising sometimes.
-
-## Compare results
-
-Run `compare.sh` if you want to check that all the scripts produce the same output.

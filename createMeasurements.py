@@ -423,35 +423,47 @@ class CreateMeasurement:
         ("Zürich", 9.3),
     )
 
-    stations = pl.DataFrame(STATIONS, ("names", "means"))
+    stations = pl.DataFrame(STATIONS, ("names", "means"), orient="row")
 
-    def __init__(self):
-        self.rng = np.random.default_rng()
+    def __init__(self, seed: int | None = None):
+        if seed is not None:
+            print(f"Intialising with seed {seed}")
+            np.random.seed(seed)
+            pl.set_random_seed(seed)
+            self.rng = np.random.default_rng(seed)
+        else:
+            self.rng = np.random.default_rng()
 
     def generate_batch(
             self,
             std_dev: float = 10,
-            records: int = 10_000_000
+            records: int = 10_000_000,
+            seed: int | None = None,
+            batch_no: int = -1,
     ) -> pl.DataFrame:
+
         batch = self.stations.sample(
             records,
             with_replacement=True,
             shuffle=True,
-            seed=self.rng.integers(np.iinfo(np.int64).max)
+            seed=seed+batch_no
         )
         batch = batch.with_columns(temperature=self.rng.normal(batch["means"], std_dev))
+
         return batch.drop("means")
 
     def generate_measurement_file(
             self,
             file_name: str = "measurements.txt",
             records: int = 1_000_000_000,
+            seed: int | None = None,
             sep: str = ";",
             std_dev: float = 10,
     ) -> None:
         print(
             f"Creating measurement file '{file_name}' with {records:,} measurements..."
         )
+
         start = time.time()
         batches = max(records // 10_000_000, 1)
         batch_ends = np.linspace(0, records, batches + 1).astype(int)
@@ -459,7 +471,7 @@ class CreateMeasurement:
         with open(file_name, encoding="utf-8", mode="w") as f:
             for i in tqdm(range(batches)):
                 from_, to = batch_ends[i], batch_ends[i + 1]
-                data = self.generate_batch(std_dev, to - from_)
+                data = self.generate_batch(std_dev, to - from_, seed=seed, batch_no=i)
                 data.write_csv(f, separator=sep, float_precision=1, include_header=False)
 
             print(
@@ -482,7 +494,6 @@ if __name__ == "__main__":
             else:
                 return value
 
-
     parser = argparse.ArgumentParser(description="Create measurement file")
     parser.add_argument(
         "-o",
@@ -501,10 +512,19 @@ if __name__ == "__main__":
         default=1_000_000_000,
     )
 
+    parser.add_argument(
+        "-s",
+        "--seed",
+        type=int,
+        help="See to use to initialise the random number generator",
+        dest="seed",
+        default=None)
+
     args = parser.parse_args()
 
-    measurement = CreateMeasurement()
+    measurement = CreateMeasurement(args.seed)
     measurement.generate_measurement_file(
         file_name=args.output,
         records=args.records,
+        seed=args.seed
     )

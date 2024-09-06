@@ -22,10 +22,8 @@ grouped = (
 )
 
 # Print final results
-print("{", end="")
 for data in grouped.iter_rows():
     print(
         f"{data[0]}={data[1]:.1f}/{data[2]:.1f}/{data[3]:.1f}",
-        end=", ",
     )
-print("\b\b} ")
+
