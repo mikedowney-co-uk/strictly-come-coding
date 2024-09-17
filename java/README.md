@@ -33,7 +33,7 @@ while(s.hasNext()){
         }
     }
 ```
-- `ByteBuffer` was a lot quicker, taking 30s. This read the input a byte at a time, counting the newlines.
+- `ByteBuffer` was a lot quicker, taking 30s. For my timing test, it read the input a byte at a time, counting the newlines.
 - A multi-threaded `ByteBuffer` could read the file in as little as 10s.
 
 ## The Attempts

@@ -1,7 +1,10 @@
-package bytebuffer;
+package unsafebuffer;
+
+import sun.misc.Unsafe;
 
 import java.io.IOException;
 import java.io.RandomAccessFile;
+import java.lang.reflect.Field;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
@@ -12,20 +15,19 @@ import java.util.concurrent.*;
  * Reads the file into a set of ByteByffers
  * Use byte arrays instead of Strings for the streams.City names.
  */
-public class CalculateByteBufferCharArray {
+public class CalculateUnsafeByteBuffer {
 
     ExecutorService threadPoolExecutor;
 
 //    String file = "../measurements.txt";
     String file = "/Users/mike.downey/PycharmProjects/1brc/measurements.txt";
-
     final int threads = Runtime.getRuntime().availableProcessors();
     RowFragments rf = new RowFragments();
-    static final int BUFFERSIZE = 256 * 1024;
+    static final int BUFFERSIZE = 512 * 1024;
 
     public static void main(String[] args) throws IOException, ExecutionException, InterruptedException {
         long startTime = System.currentTimeMillis();
-        new CalculateByteBufferCharArray().go();
+        new CalculateUnsafeByteBuffer().go();
         long endTime = System.currentTimeMillis();
         System.out.println("Took " + (endTime - startTime) / 1000 + " s");
     }
@@ -73,12 +75,14 @@ public class CalculateByteBufferCharArray {
 
             processFragments(overallResults);
             sortAndDisplay(overallResults);
+        } catch (NoSuchFieldException | IllegalAccessException e) {
+            throw new RuntimeException(e);
         }
     }
 
     private static void sortAndDisplay(ListOfCities overallResults) {
         TreeMap<String, Station> sortedCities = new TreeMap<>();
-        for (Long hash : overallResults.keySet()) {
+        for (Integer hash : overallResults.keySet()) {
             Station c = overallResults.get(hash);
             sortedCities.put(
                     new String(c.name, StandardCharsets.UTF_8),
@@ -104,7 +108,7 @@ public class CalculateByteBufferCharArray {
         }
     }
 
-    private boolean processNextBlock(ByteBuffer[] buffers, int i, int blockNumber, Future<?>[] runningThreads, FileChannel channel) throws IOException {
+    private boolean processNextBlock(ByteBuffer[] buffers, int i, int blockNumber, Future<?>[] runningThreads, FileChannel channel) throws IOException, NoSuchFieldException, IllegalAccessException {
         boolean doWeStillHaveData;
         // last buffer should have pre-loaded data, swap that into the current slot
         // and refill the previous one.
@@ -125,12 +129,12 @@ public class CalculateByteBufferCharArray {
 
 
     private void mergeAndStoreResults(ListOfCities result, ListOfCities overallResults) {
-        for (Long hash : result.keySet()) {
+        for (Integer hash : result.keySet()) {
             overallResults.mergeCity(result.get(hash));
         }
     }
 
-    private void launchInitialProcesses(ByteBuffer[] buffers, FileChannel channel, Future<?>[] whatsRunning) throws IOException {
+    private void launchInitialProcesses(ByteBuffer[] buffers, FileChannel channel, Future<?>[] whatsRunning) throws IOException, NoSuchFieldException, IllegalAccessException {
         for (int i = 0; i < threads; i++) {
             ByteBuffer b = ByteBuffer.allocate(BUFFERSIZE);
             buffers[i] = b;
@@ -150,11 +154,12 @@ public class CalculateByteBufferCharArray {
 
     class ProcessData {
 
-        ByteBuffer buffer;
+//        ByteBuffer buffer;
+        UnsafeBuffer buffer;
         int blockNumber;
 
         public ProcessData(ByteBuffer buffer, int blockNumber) {
-            this.buffer = buffer;
+            this.buffer = new UnsafeBuffer(buffer);
             this.blockNumber = blockNumber;
         }
 
@@ -169,7 +174,7 @@ public class CalculateByteBufferCharArray {
             AppendableByteArray name = new AppendableByteArray();
             AppendableByteArray value = new AppendableByteArray();
             boolean readingName = true;
-            for (int i = start; i < buffer.limit(); i++) {
+            for (int i = start; i < buffer.limit; i++) {
                 byte b = buffer.get();
                 if (b == ';') {
                     readingName = false;
@@ -238,7 +243,7 @@ public class CalculateByteBufferCharArray {
         }
     }
 
-    class RowFragments {
+    static class RowFragments {
         // Holds line fragments at the start and end of each block
         ConcurrentHashMap<Integer, AppendableByteArray> lineStarts = new ConcurrentHashMap<>();
         ConcurrentHashMap<Integer, AppendableByteArray> lineEnds = new ConcurrentHashMap<>();
@@ -268,15 +273,15 @@ public class CalculateByteBufferCharArray {
         }
     }
 
-    class Station {
+    static class Station {
         public final byte[] name;
         public int measurements = 0;
         public double total = 0;
         public double maxT = Double.MIN_VALUE;
         public double minT = Double.MAX_VALUE;
-        public final long hashCode;
+        public final int hashCode;
 
-        Station(byte[] name, long hash) {
+        Station(byte[] name, int hash) {
             this.name = name;
             this.hashCode = hash;
         }
@@ -316,32 +321,32 @@ public class CalculateByteBufferCharArray {
 
 
     // class which takes streams.City entries and stores/updates them
-    class ListOfCities extends HashMap<Long, Station> {
+    class ListOfCities extends HashMap<Integer, Station> {
 
         // inlined hashcode for tiny speed increase
         static int hashCode(byte[] a) {
             int result = 0;
-            for (int i = 0; i < a.length; i++) {
-                result = 31 * result + a[i];
+            for (byte b : a) {
+                result = 31 * result + b;
             }
             return result;
         }
 
         void addCity(TempRecord c) {
-            long h = hashCode(c.name());
+            int h = hashCode(c.name);
             Station city = this.get(h);
             if (city != null) {
-                city.add_measurement(c.temperature());
+                city.add_measurement(c.temperature);
             } else {
-                Station city1 = new Station(c.name(), h);
-                city1.add_measurement(c.temperature());
+                Station city1 = new Station(c.name, h);
+                city1.add_measurement(c.temperature);
                 this.put(h, city1);
             }
         }
 
         void mergeCity(Station c1) {
             // combine two sets of measurements for a city
-            long h = c1.hashCode;
+            int h = c1.hashCode;
             Station c2 = this.get(h);
             if (c2 != null) {
                 c2.combine_results(c1);
@@ -383,20 +388,10 @@ class AppendableByteArray {
 
     void addByte(byte b) {
         buffer[length++] = b;
-//        if (length > buffer.length) {
-//            System.err.println("Too many characters in " + new String(buffer, StandardCharsets.UTF_8));
-//            throw new BufferOverflowException();
-//            // TODO: increase buffer size if we really want to be flexible
-//        }
     }
 
     void appendArray(AppendableByteArray toAppend) {
         System.arraycopy(toAppend.buffer, 0, buffer, length, toAppend.length);
-        length += toAppend.length;
-    }
-
-    void appendArray(byte[] toAppend) {
-        System.arraycopy(toAppend, 0, buffer, length, toAppend.length);
         length += toAppend.length;
     }
 
@@ -410,3 +405,55 @@ class AppendableByteArray {
 
 }
 
+class UnsafeBuffer {
+    static Unsafe unsafe;
+    ByteBuffer buffer;
+    int bufferPosition;
+    int limit;
+    byte[] array;
+    int chunkPos;
+    long chunk;
+
+    static {
+        try {
+            Field unsafeField = Unsafe.class.getDeclaredField("theUnsafe");
+            unsafeField.setAccessible(true);
+            unsafe = (Unsafe) unsafeField.get(null);
+        } catch (NoSuchFieldException | IllegalAccessException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    UnsafeBuffer(ByteBuffer buffer) {
+        this.buffer = buffer;
+        this.limit = buffer.limit();
+        this.array = buffer.array();
+        this.bufferPosition = unsafe.arrayBaseOffset(byte[].class);
+        this.chunkPos = 7;
+    }
+
+    public void clear() {
+        buffer.clear();
+    }
+
+    // This does no range checks, they are the responsibility of the caller
+    public byte _get() {
+        return unsafe.getByte(array, bufferPosition++);
+    }
+
+    public byte get() {
+        if (chunkPos++ == 7) {
+            chunk = readLong();
+        }
+        byte b = (byte) chunk;
+        bufferPosition ++;
+        chunk >>= 8;
+        return b;
+    }
+
+    private Long readLong() {
+        chunkPos = 0;
+        return unsafe.getLong(array,  bufferPosition);
+    }
+
+}
