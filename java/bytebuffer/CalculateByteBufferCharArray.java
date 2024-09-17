@@ -16,9 +16,7 @@ public class CalculateByteBufferCharArray {
 
     ExecutorService threadPoolExecutor;
 
-//    String file = "../measurements.txt";
-    String file = "/Users/mike.downey/PycharmProjects/1brc/measurements.txt";
-//    String file = "/Users/mike.downey/PycharmProjects/1brc/million.txt";
+    String file = "../measurements.txt";
 
     final int threads = Runtime.getRuntime().availableProcessors();
     RowFragments rf = new RowFragments();
