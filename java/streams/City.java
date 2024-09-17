@@ -1,5 +1,6 @@
+package streams;
 
-class City implements Comparable<City> {
+public class City implements Comparable<City> {
     public String name;
     public int measurements = 0;
     public double total = 0;
