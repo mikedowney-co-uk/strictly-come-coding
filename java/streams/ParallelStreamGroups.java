@@ -10,7 +10,7 @@ import java.util.stream.Stream;
 
 public class ParallelStreamGroups {
 
-    String file = "../../measurements.txt";
+    String file = "million.txt";
 
     public static void main(String[] args) throws IOException {
         long startTime = System.currentTimeMillis();

@@ -16,20 +16,20 @@ public class CalculateByteBufferCharArray {
 
     ExecutorService threadPoolExecutor;
 
-    String file = "../measurements.txt";
+    String file = "million.txt";
 
     final int threads = Runtime.getRuntime().availableProcessors();
     RowFragments rf = new RowFragments();
     static final int BUFFERSIZE = 256 * 1024;
 
-    public static void main(String[] args) throws IOException, ExecutionException, InterruptedException, NoSuchFieldException, IllegalAccessException {
+    public static void main(String[] args) throws IOException, ExecutionException, InterruptedException {
         long startTime = System.currentTimeMillis();
         new CalculateByteBufferCharArray().go();
         long endTime = System.currentTimeMillis();
         System.out.println("Took " + (endTime - startTime) / 1000 + " s");
     }
 
-    private void go() throws IOException, ExecutionException, InterruptedException, NoSuchFieldException, IllegalAccessException {
+    private void go() throws IOException, ExecutionException, InterruptedException {
         System.out.println("Using " + threads + " cores");
         threadPoolExecutor = Executors.newFixedThreadPool(threads);
         Future<?>[] runningThreads = new Future<?>[threads];
@@ -102,7 +102,7 @@ public class CalculateByteBufferCharArray {
         }
     }
 
-    private boolean processNextBlock(ByteBuffer[] buffers, int i, int blockNumber, Future<?>[] runningThreads, FileChannel channel) throws IOException, NoSuchFieldException, IllegalAccessException {
+    private boolean processNextBlock(ByteBuffer[] buffers, int i, int blockNumber, Future<?>[] runningThreads, FileChannel channel) throws IOException {
         boolean doWeStillHaveData;
         // last buffer should have pre-loaded data, swap that into the current slot
         // and refill the previous one.
@@ -128,7 +128,7 @@ public class CalculateByteBufferCharArray {
         }
     }
 
-    private void launchInitialProcesses(ByteBuffer[] buffers, FileChannel channel, Future<?>[] whatsRunning) throws IOException, NoSuchFieldException, IllegalAccessException {
+    private void launchInitialProcesses(ByteBuffer[] buffers, FileChannel channel, Future<?>[] whatsRunning) throws IOException {
         for (int i = 0; i < threads; i++) {
             ByteBuffer b = ByteBuffer.allocate(BUFFERSIZE);
             buffers[i] = b;
@@ -159,13 +159,13 @@ public class CalculateByteBufferCharArray {
         ListOfCities process() {
             ListOfCities results = new ListOfCities();
             // Read up to the first newline and store that as an 'end of line' fragment
-            AppendableByteArray sb = new AppendableByteArray();
+            _AppendableByteArray sb = new _AppendableByteArray();
             int start = readUpToLineEnd(sb);
             rf.addEnd(blockNumber, sb);
 
             // Main loop through block, read until we get to the delimiter and the newline
-            AppendableByteArray name = new AppendableByteArray();
-            AppendableByteArray value = new AppendableByteArray();
+            _AppendableByteArray name = new _AppendableByteArray();
+            _AppendableByteArray value = new _AppendableByteArray();
             boolean readingName = true;
             int size = buffer.limit();
             for (int i = start; i < size; i++) {
@@ -182,8 +182,8 @@ public class CalculateByteBufferCharArray {
                 }
             }
             // If we get to the end and there is still data left, add it to the fragments as the start of the next block
-            AppendableByteArray fragment = new AppendableByteArray();
             if (name.length > 0) {
+                _AppendableByteArray fragment = new _AppendableByteArray();
                 fragment.appendArray(name);
                 if (!readingName) {
                     fragment.addByte((byte) ';');
@@ -197,7 +197,7 @@ public class CalculateByteBufferCharArray {
             return results;
         }
 
-        private int readUpToLineEnd(AppendableByteArray sb) {
+        private int readUpToLineEnd(_AppendableByteArray sb) {
             byte b = buffer.get();
             int start = 1;
             while (b != '\n') {
@@ -232,26 +232,25 @@ public class CalculateByteBufferCharArray {
         }
     }
 
-    // todo: get rid of this, store the fragments in the ListOfCities instead.
     class RowFragments {
         // Holds line fragments at the start and end of each block
-        ConcurrentHashMap<Integer, AppendableByteArray> lineStarts = new ConcurrentHashMap<>();
-        ConcurrentHashMap<Integer, AppendableByteArray> lineEnds = new ConcurrentHashMap<>();
+        ConcurrentHashMap<Integer, _AppendableByteArray> lineStarts = new ConcurrentHashMap<>();
+        ConcurrentHashMap<Integer, _AppendableByteArray> lineEnds = new ConcurrentHashMap<>();
 
         // spare characters at the end of a block will be the start of a row in the next block.
         // Called with 'block+1' so this is where it needs to be
-        void addStart(Integer blockNumber, AppendableByteArray s) {
+        void addStart(Integer blockNumber, _AppendableByteArray s) {
             lineStarts.put(blockNumber, s);
         }
 
         // characters before the first newline may be part of the previous block
-        void addEnd(Integer blockNumber, AppendableByteArray s) {
+        void addEnd(Integer blockNumber, _AppendableByteArray s) {
             lineEnds.put(blockNumber, s);
         }
 
         String getJoinedFragments(int hashCode) {
-            AppendableByteArray start = lineStarts.get(hashCode);
-            AppendableByteArray end = lineEnds.get(hashCode);
+            _AppendableByteArray start = lineStarts.get(hashCode);
+            _AppendableByteArray end = lineEnds.get(hashCode);
             if (start == null) {
                 return end.asString();
             } else if (end == null) {
@@ -366,7 +365,7 @@ class _AppendableByteArray {
         buffer[length++] = b;
     }
 
-    void appendArray(AppendableByteArray toAppend) {
+    void appendArray(_AppendableByteArray toAppend) {
         System.arraycopy(toAppend.buffer, 0, buffer, length, toAppend.length);
         length += toAppend.length;
     }
