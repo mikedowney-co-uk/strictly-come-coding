@@ -19,8 +19,7 @@ public class CalculateUnsafeByteBuffer {
 
     ExecutorService threadPoolExecutor;
 
-//    String file = "../measurements.txt";
-    String file = "/Users/mike.downey/PycharmProjects/1brc/measurements.txt";
+    String file = "../measurements.txt";
     final int threads = Runtime.getRuntime().availableProcessors();
     RowFragments rf = new RowFragments();
     static final int BUFFERSIZE = 512 * 1024;
@@ -103,8 +102,7 @@ public class CalculateUnsafeByteBuffer {
         System.out.println("Fragments: " + allFragments.size());
         for (Integer f : allFragments) {
             String line = rf.getJoinedFragments(f);
-            TempRecord c = Station.processRow(line);
-            overallResults.addCity(c);
+            overallResults.addCity(line);
         }
     }
 
@@ -154,7 +152,6 @@ public class CalculateUnsafeByteBuffer {
 
     class ProcessData {
 
-//        ByteBuffer buffer;
         UnsafeBuffer buffer;
         int blockNumber;
 
@@ -185,16 +182,15 @@ public class CalculateUnsafeByteBuffer {
                         value.addByte(b);
                     }
                 } else {
-                    TempRecord c = new TempRecord(name.getBuffer(), fastParseDouble(value.buffer, value.length));
-                    results.addCity(c);
+                    results.addCity(name.getBuffer(), fastParseDouble(value.buffer, value.length));
                     name.rewind();
                     value.rewind();
                     readingName = true;
                 }
             }
             // If we get to the end and there is still data left, add it to the fragments as the start of the next block
-            AppendableByteArray fragment = new AppendableByteArray();
             if (name.length > 0) {
+                AppendableByteArray fragment = new AppendableByteArray();
                 fragment.appendArray(name);
                 if (!readingName) {
                     fragment.addByte((byte) ';');
@@ -281,9 +277,10 @@ public class CalculateUnsafeByteBuffer {
         public double minT = Double.MAX_VALUE;
         public final int hashCode;
 
-        Station(byte[] name, int hash) {
+        Station(byte[] name, int hash, double temp) {
             this.name = name;
             this.hashCode = hash;
+            this.total = temp;
         }
 
         public void add_measurement(double temp) {
@@ -310,37 +307,36 @@ public class CalculateUnsafeByteBuffer {
             }
         }
 
-        static TempRecord processRow(String s) {
-            String[] bits = s.split(";");
-            return new TempRecord(bits[0].getBytes(StandardCharsets.UTF_8), Double.parseDouble(bits[1]));
-        }
+//        static TempRecord processRow(String s) {
+//            String[] bits = s.split(";");
+//            return new TempRecord(bits[0].getBytes(StandardCharsets.UTF_8), Double.parseDouble(bits[1]));
+//        }
     }
 
-    record TempRecord(byte[] name, Double temperature) {
-    }
+//    record TempRecord(byte[] name, Double temperature) {
+//    }
 
 
     // class which takes streams.City entries and stores/updates them
     class ListOfCities extends HashMap<Integer, Station> {
 
-        // inlined hashcode for tiny speed increase
-        static int hashCode(byte[] a) {
-            int result = 0;
-            for (byte b : a) {
-                result = 31 * result + b;
-            }
-            return result;
+        // Only called at the end on the line fragments - doesn't need to be as optimised
+        void addCity(String line) {
+            String[] bits = line.split(";");
+            addCity(bits[0].getBytes(StandardCharsets.UTF_8), Double.parseDouble(bits[1]));
         }
 
-        void addCity(TempRecord c) {
-            int h = hashCode(c.name);
+        void addCity(byte[] name, double temperature) {
+            // inlined hashcode for tiny speed increase
+            int h = 0;
+            for (byte b : name) {
+                h = 31 * h + b;
+            }
             Station city = this.get(h);
             if (city != null) {
-                city.add_measurement(c.temperature);
+                city.add_measurement(temperature);
             } else {
-                Station city1 = new Station(c.name, h);
-                city1.add_measurement(c.temperature);
-                this.put(h, city1);
+                this.put(h, new Station(name, h, temperature));
             }
         }
 
@@ -375,11 +371,6 @@ class AppendableByteArray {
     AppendableByteArray() {
         length = 0;
         buffer = new byte[INITIAL_BUFF_SIZE];
-    }
-
-    AppendableByteArray(byte[] array) {
-        length = array.length;
-        buffer = array;
     }
 
     byte[] getBuffer() {
@@ -429,7 +420,8 @@ class UnsafeBuffer {
         this.limit = buffer.limit();
         this.array = buffer.array();
         this.bufferPosition = unsafe.arrayBaseOffset(byte[].class);
-        this.chunkPos = 7;
+        this.chunkPos = 0;
+        this.chunk = unsafe.getLong(array,  bufferPosition);
     }
 
     public void clear() {
@@ -443,17 +435,13 @@ class UnsafeBuffer {
 
     public byte get() {
         if (chunkPos++ == 7) {
-            chunk = readLong();
+            chunkPos = 0;
+            chunk = unsafe.getLong(array,  bufferPosition);
         }
         byte b = (byte) chunk;
         bufferPosition ++;
         chunk >>= 8;
         return b;
-    }
-
-    private Long readLong() {
-        chunkPos = 0;
-        return unsafe.getLong(array,  bufferPosition);
     }
 
 }

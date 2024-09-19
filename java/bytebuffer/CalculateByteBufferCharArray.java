@@ -10,27 +10,26 @@ import java.util.concurrent.*;
 
 /**
  * Reads the file into a set of ByteByffers
- * Use byte arrays instead of Strings for the streams.City names.
+ * Use byte arrays instead of Strings for the City names.
  */
 public class CalculateByteBufferCharArray {
 
     ExecutorService threadPoolExecutor;
 
-//    String file = "../measurements.txt";
-    String file = "/Users/mike.downey/PycharmProjects/1brc/measurements.txt";
+    String file = "../measurements.txt";
 
     final int threads = Runtime.getRuntime().availableProcessors();
     RowFragments rf = new RowFragments();
     static final int BUFFERSIZE = 256 * 1024;
 
-    public static void main(String[] args) throws IOException, ExecutionException, InterruptedException {
+    public static void main(String[] args) throws IOException, ExecutionException, InterruptedException, NoSuchFieldException, IllegalAccessException {
         long startTime = System.currentTimeMillis();
         new CalculateByteBufferCharArray().go();
         long endTime = System.currentTimeMillis();
         System.out.println("Took " + (endTime - startTime) / 1000 + " s");
     }
 
-    private void go() throws IOException, ExecutionException, InterruptedException {
+    private void go() throws IOException, ExecutionException, InterruptedException, NoSuchFieldException, IllegalAccessException {
         System.out.println("Using " + threads + " cores");
         threadPoolExecutor = Executors.newFixedThreadPool(threads);
         Future<?>[] runningThreads = new Future<?>[threads];
@@ -78,7 +77,7 @@ public class CalculateByteBufferCharArray {
 
     private static void sortAndDisplay(ListOfCities overallResults) {
         TreeMap<String, Station> sortedCities = new TreeMap<>();
-        for (Long hash : overallResults.keySet()) {
+        for (Integer hash : overallResults.keySet()) {
             Station c = overallResults.get(hash);
             sortedCities.put(
                     new String(c.name, StandardCharsets.UTF_8),
@@ -99,12 +98,11 @@ public class CalculateByteBufferCharArray {
         System.out.println("Fragments: " + allFragments.size());
         for (Integer f : allFragments) {
             String line = rf.getJoinedFragments(f);
-            TempRecord c = Station.processRow(line);
-            overallResults.addCity(c);
+            overallResults.addCity(line);
         }
     }
 
-    private boolean processNextBlock(ByteBuffer[] buffers, int i, int blockNumber, Future<?>[] runningThreads, FileChannel channel) throws IOException {
+    private boolean processNextBlock(ByteBuffer[] buffers, int i, int blockNumber, Future<?>[] runningThreads, FileChannel channel) throws IOException, NoSuchFieldException, IllegalAccessException {
         boolean doWeStillHaveData;
         // last buffer should have pre-loaded data, swap that into the current slot
         // and refill the previous one.
@@ -125,12 +123,12 @@ public class CalculateByteBufferCharArray {
 
 
     private void mergeAndStoreResults(ListOfCities result, ListOfCities overallResults) {
-        for (Long hash : result.keySet()) {
+        for (Integer hash : result.keySet()) {
             overallResults.mergeCity(result.get(hash));
         }
     }
 
-    private void launchInitialProcesses(ByteBuffer[] buffers, FileChannel channel, Future<?>[] whatsRunning) throws IOException {
+    private void launchInitialProcesses(ByteBuffer[] buffers, FileChannel channel, Future<?>[] whatsRunning) throws IOException, NoSuchFieldException, IllegalAccessException {
         for (int i = 0; i < threads; i++) {
             ByteBuffer b = ByteBuffer.allocate(BUFFERSIZE);
             buffers[i] = b;
@@ -169,19 +167,15 @@ public class CalculateByteBufferCharArray {
             AppendableByteArray name = new AppendableByteArray();
             AppendableByteArray value = new AppendableByteArray();
             boolean readingName = true;
-            for (int i = start; i < buffer.limit(); i++) {
+            int size = buffer.limit();
+            for (int i = start; i < size; i++) {
                 byte b = buffer.get();
                 if (b == ';') {
                     readingName = false;
                 } else if (b != '\n') {
-                    if (readingName) {
-                        name.addByte(b);
-                    } else {
-                        value.addByte(b);
-                    }
+                    (readingName ? name : value).addByte(b);
                 } else {
-                    TempRecord c = new TempRecord(name.getBuffer(), fastParseDouble(value.buffer, value.length));
-                    results.addCity(c);
+                    results.addCity(name.getBuffer(), fastParseDouble(value.buffer, value.length));
                     name.rewind();
                     value.rewind();
                     readingName = true;
@@ -238,6 +232,7 @@ public class CalculateByteBufferCharArray {
         }
     }
 
+    // todo: get rid of this, store the fragments in the ListOfCities instead.
     class RowFragments {
         // Holds line fragments at the start and end of each block
         ConcurrentHashMap<Integer, AppendableByteArray> lineStarts = new ConcurrentHashMap<>();
@@ -254,9 +249,9 @@ public class CalculateByteBufferCharArray {
             lineEnds.put(blockNumber, s);
         }
 
-        String getJoinedFragments(int number) {
-            AppendableByteArray start = lineStarts.get(number);
-            AppendableByteArray end = lineEnds.get(number);
+        String getJoinedFragments(int hashCode) {
+            AppendableByteArray start = lineStarts.get(hashCode);
+            AppendableByteArray end = lineEnds.get(hashCode);
             if (start == null) {
                 return end.asString();
             } else if (end == null) {
@@ -270,15 +265,16 @@ public class CalculateByteBufferCharArray {
 
     class Station {
         public final byte[] name;
-        public int measurements = 0;
-        public double total = 0;
+        public int measurements = 1;
+        public double total;
         public double maxT = Double.MIN_VALUE;
         public double minT = Double.MAX_VALUE;
-        public final long hashCode;
+        public final int hashCode;
 
-        Station(byte[] name, long hash) {
+        Station(byte[] name, int hash, double temp) {
             this.name = name;
             this.hashCode = hash;
+            this.total = temp;
         }
 
         public void add_measurement(double temp) {
@@ -304,44 +300,34 @@ public class CalculateByteBufferCharArray {
                 minT = city.minT;
             }
         }
+    }
 
-        static TempRecord processRow(String s) {
-            String[] bits = s.split(";");
-            return new TempRecord(bits[0].getBytes(StandardCharsets.UTF_8), Double.parseDouble(bits[1]));
+    // class which takes City entries and stores/updates them
+    class ListOfCities extends HashMap<Integer, Station> {
+
+        // Only called at the end on the line fragments - doesn't need to be as optimised
+        void addCity(String line) {
+            String[] bits = line.split(";");
+            addCity(bits[0].getBytes(StandardCharsets.UTF_8), Double.parseDouble(bits[1]));
         }
-    }
 
-    record TempRecord(byte[] name, Double temperature) {
-    }
-
-
-    // class which takes streams.City entries and stores/updates them
-    class ListOfCities extends HashMap<Long, Station> {
-
-        // inlined hashcode for tiny speed increase
-        static int hashCode(byte[] a) {
-            int result = 0;
-            for (int i = 0; i < a.length; i++) {
-                result = 31 * result + a[i];
+        void addCity(byte[] name, double temperature) {
+            // inlined hashcode for tiny speed increase
+            int h = 0;
+            for (byte b : name) {
+                h = 31 * h + b;
             }
-            return result;
-        }
-
-        void addCity(TempRecord c) {
-            long h = hashCode(c.name());
             Station city = this.get(h);
             if (city != null) {
-                city.add_measurement(c.temperature());
+                city.add_measurement(temperature);
             } else {
-                Station city1 = new Station(c.name(), h);
-                city1.add_measurement(c.temperature());
-                this.put(h, city1);
+                this.put(h, new Station(name, h, temperature));
             }
         }
 
         void mergeCity(Station c1) {
             // combine two sets of measurements for a city
-            long h = c1.hashCode;
+            int h = c1.hashCode;
             Station c2 = this.get(h);
             if (c2 != null) {
                 c2.combine_results(c1);
@@ -355,7 +341,7 @@ public class CalculateByteBufferCharArray {
 /**
  * Holds a byte array along with methods to add bytes and concatenate arrays.
  */
-class AppendableByteArray {
+class _AppendableByteArray {
     int length;
     byte[] buffer;
     static int INITIAL_BUFF_SIZE = 40;
@@ -367,14 +353,9 @@ class AppendableByteArray {
      And that place in Wales (Llanfairpwllgwyngyllgogerychwyrndrobwllllantysiliogogogoch)
      if 58 but I don't think that's in the data either.
      */
-    AppendableByteArray() {
+    _AppendableByteArray() {
         length = 0;
         buffer = new byte[INITIAL_BUFF_SIZE];
-    }
-
-    AppendableByteArray(byte[] array) {
-        length = array.length;
-        buffer = array;
     }
 
     byte[] getBuffer() {
@@ -383,20 +364,10 @@ class AppendableByteArray {
 
     void addByte(byte b) {
         buffer[length++] = b;
-//        if (length > buffer.length) {
-//            System.err.println("Too many characters in " + new String(buffer, StandardCharsets.UTF_8));
-//            throw new BufferOverflowException();
-//            // TODO: increase buffer size if we really want to be flexible
-//        }
     }
 
     void appendArray(AppendableByteArray toAppend) {
         System.arraycopy(toAppend.buffer, 0, buffer, length, toAppend.length);
-        length += toAppend.length;
-    }
-
-    void appendArray(byte[] toAppend) {
-        System.arraycopy(toAppend, 0, buffer, length, toAppend.length);
         length += toAppend.length;
     }
 
@@ -407,6 +378,4 @@ class AppendableByteArray {
     public String asString() {
         return new String(buffer, 0, length, StandardCharsets.UTF_8);
     }
-
 }
-
