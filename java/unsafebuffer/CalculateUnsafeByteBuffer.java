@@ -16,7 +16,7 @@ import java.util.concurrent.Future;
 
 /**
  * Reads the file into a set of ByteByffers
- * Use byte arrays instead of Strings for the streams.City names.
+ * Use byte arrays instead of Strings for the City names.
  */
 public class CalculateUnsafeByteBuffer {
 
@@ -26,7 +26,7 @@ public class CalculateUnsafeByteBuffer {
 
     final int threads = Runtime.getRuntime().availableProcessors();
     RowFragments rf = new RowFragments();
-    static final int BUFFERSIZE = 512 * 1024;
+    static final int BUFFERSIZE = 256 * 1024;
 
     public static void main(String[] args) throws IOException, ExecutionException, InterruptedException {
         long startTime = System.currentTimeMillis();
@@ -89,18 +89,19 @@ public class CalculateUnsafeByteBuffer {
         for (Map.Entry<String, Station> e : sortedCities.entrySet()) {
             Station city = e.getValue();
             AppendableByteArray output = new AppendableByteArray();
-            output.addByte((byte) ';').
-                    appendArray(fastNumberToString(city.minT)).
-                    addByte((byte) ';').
-                    // todo: sort out average calculation rounding errors using ints..
-                    appendArray(String.format("%.1f;", city.total / (city.measurements * 10.0)).getBytes(StandardCharsets.UTF_8)).
-                    appendArray(fastNumberToString(city.maxT));
+            output.addByte((byte) ';');
+            output.appendArray(fastNumberToString(city.minT));
+            output.addByte((byte) ';');
+            // todo: sort out average calculation rounding errors using ints..
+            output.appendArray(String.format("%.1f;", city.total / (city.measurements * 10.0)).getBytes(StandardCharsets.UTF_8));
+            output.appendArray(fastNumberToString(city.maxT));
 //            System.out.printf("%s=%.1f/%.1f/%.1f\n",
 //                    e.getKey(),
 //                    city.minT/10.0,
 //                    city.total / (city.measurements * 10.0),
 //                    city.maxT/10.0);
             System.out.print(e.getKey());
+//            System.out.print(" ("+city.measurements+") ");
             System.out.println(output.asString());
         }
     }
@@ -108,13 +109,12 @@ public class CalculateUnsafeByteBuffer {
     static byte[] fastNumberToString(int number) {
         int length;
         byte[] bytes;
-        if (number <0 ){ // -9 (-0.9), -99 (-9.9), -999 (-99.9)
+        if (number < 0) { // -9 (-0.9), -99 (-9.9), -999 (-99.9)
             number = -number;  // negative
             if (number >= 100) {
                 length = 5;
                 bytes = new byte[5]; // 3 digits, 5 characters
-            }
-            else {
+            } else {
                 length = 4;
                 bytes = new byte[4];
             }
@@ -123,13 +123,13 @@ public class CalculateUnsafeByteBuffer {
             length = number >= 100 ? 4 : 3;
             bytes = new byte[length];
         }
-        bytes[length-1] = (byte) ('0' + (number % 10));
+        bytes[length - 1] = (byte) ('0' + (number % 10));
         number /= 10;
-        bytes[length-2] = '.';
-        bytes[length-3] = (byte) ('0' + (number % 10));
-        if (length >= 4) {
+        bytes[length - 2] = '.';
+        bytes[length - 3] = (byte) ('0' + (number % 10));
+        if (number >= 10) {
             number /= 10;
-            bytes[length-4] = (byte) ('0' + (number % 10));
+            bytes[length - 4] = (byte) ('0' + (number % 10));
         }
         return bytes;
     }
@@ -140,7 +140,9 @@ public class CalculateUnsafeByteBuffer {
         System.out.println("Fragments: " + allFragments.size());
         for (Integer f : allFragments) {
             String line = rf.getJoinedFragments(f);
-            overallResults.addCity(line);
+            if (!line.isEmpty()) {
+                overallResults.addCity(line);
+            }
         }
     }
 
@@ -163,15 +165,15 @@ public class CalculateUnsafeByteBuffer {
         }
     }
 
-    private void mergeAndStoreResults(ListOfCities result, ListOfCities overallResults) {
-        if (result.endFragment != null) {
-            rf.addStart(result.blockNumber + 1, result.endFragment);
+    private void mergeAndStoreResults(ListOfCities resultToAdd, ListOfCities overallResults) {
+        if (resultToAdd.endFragment != null) {
+            rf.addStart(resultToAdd.blockNumber + 1, resultToAdd.endFragment);
         }
-        if (result.startFragment != null) {
-            rf.addEnd(result.blockNumber, result.startFragment);
+        if (resultToAdd.startFragment != null) {
+            rf.addEnd(resultToAdd.blockNumber, resultToAdd.startFragment);
         }
-        for (Integer hash : result.keySet()) {
-            overallResults.mergeCity(result.get(hash));
+        for (Integer hash : resultToAdd.keySet()) {
+            overallResults.mergeCity(resultToAdd.get(hash));
         }
     }
 
@@ -203,6 +205,7 @@ public class CalculateUnsafeByteBuffer {
 
         static Unsafe unsafe;
         static final int arrayOffset;
+
         static {
             try {
                 Field unsafeField = Unsafe.class.getDeclaredField("theUnsafe");
@@ -225,53 +228,52 @@ public class CalculateUnsafeByteBuffer {
         ListOfCities process() {
             ListOfCities results = new ListOfCities(blockNumber);
             // Read up to the first newline and add it as a fragment (potential end of previous block)
-            AppendableByteArray sb = new AppendableByteArray();
+//            AppendableByteArray sb = new AppendableByteArray();
+            ByteArrayWindow baw = new ByteArrayWindow(array, bufferPosition, blockNumber);
             byte b = unsafe.getByte(array, bufferPosition++);
-            int start = 1;
+            int start = 0;
             while (b != '\n') {
-                sb.addByte(b);
+                baw.incrementEnd();
                 b = unsafe.getByte(array, bufferPosition++);
                 start++;
             }
-            results.startFragment = sb;
+            results.startFragment = baw.getArray();
 
             // Main loop through block, read until we get to the delimiter and the newline
-            AppendableByteArray name = new AppendableByteArray();
-            AppendableByteArray value = new AppendableByteArray();
+            ByteArrayWindow name = new ByteArrayWindow(array, bufferPosition, blockNumber);
+            ByteArrayWindow value = new ByteArrayWindow(array, bufferPosition, blockNumber);
             boolean readingName = true;
             for (int i = start; i < limit; i++) {
                 b = unsafe.getByte(array, bufferPosition++);
                 if (b == ';') {
                     readingName = false;
+                    name.endIndex = bufferPosition - 1;
+                    value.startIndex = bufferPosition;
                 } else if (b != '\n') {
                     if (readingName) {
-                        name.addByte(b);
+                        name.incrementEnd();
                     } else {
-                        value.addByte(b);
+                        value.incrementEnd();
                     }
                 } else {
-                    // Copy the name into a byte array
-                    byte[] namearray = new byte[name.length];
-                    unsafe.copyMemory(name.buffer, arrayOffset, namearray,  arrayOffset, name.length);
-                    results.addCity(namearray, fastParseDouble(value.buffer, value.length));
-                    name.rewind();
-                    value.rewind();
+                    byte[] namearray = name.getArray().array;
+                    value.endIndex = bufferPosition - 1;
+                    results.addCity(namearray, fastParseDouble(value.getArray().array, value.length()));
+                    name.rewind(bufferPosition);
+                    value.rewind(bufferPosition);
                     readingName = true;
                 }
-            }
+            } // end for
             // If we get to the end and there is still data left, add it to the fragments as the start of the next block
-            if (name.length > 0) {
-                AppendableByteArray fragment = new AppendableByteArray();
-                fragment.appendArray(name);
-                if (!readingName) { // we got as far as the number so add that to the end fragment
-                    fragment.addByte((byte) ';');
-                    if (value.length > 0) {
-                        fragment.appendArray(value);
-                    }
-                }
-                results.endFragment = fragment;
+            if (name.length() > 0) {
+                ByteArrayWindow fragment = new ByteArrayWindow(array,
+                        name.startIndex,
+                        blockNumber);
+                fragment.endIndex = bufferPosition - 1;
+                results.endFragment = fragment.getArray();
             }
             innerBuffer.clear();
+//            System.out.println(blockNumber + ": " + new String(baw.array) + " , " + new String(results.endFragment.array));
             return results;
         }
     }
@@ -299,30 +301,30 @@ public class CalculateUnsafeByteBuffer {
 
     static class RowFragments {
         // Holds line fragments at the start and end of each block
-        Map<Integer, AppendableByteArray> lineStarts = new HashMap<>();
-        Map<Integer, AppendableByteArray> lineEnds = new HashMap<>();
+        Map<Integer, ByteArrayWindow> lineStarts = new HashMap<>();
+        Map<Integer, ByteArrayWindow> lineEnds = new HashMap<>();
 
         // spare characters at the end of a block will be the start of a row in the next block.
-        // Called with 'block+1' so this is where it needs to be
-        void addStart(Integer blockNumber, AppendableByteArray s) {
+        void addStart(Integer blockNumber, ByteArrayWindow s) {
             lineStarts.put(blockNumber, s);
         }
 
-        // characters before the first newline may be part of the previous block
-        void addEnd(Integer blockNumber, AppendableByteArray s) {
+        void addEnd(Integer blockNumber, ByteArrayWindow s) {
             lineEnds.put(blockNumber, s);
         }
 
         String getJoinedFragments(int number) {
-            AppendableByteArray start = lineStarts.get(number);
-            AppendableByteArray end = lineEnds.get(number);
+            ByteArrayWindow start = lineStarts.get(number);
+            ByteArrayWindow end = lineEnds.get(number);
             if (start == null) {
-                return end.asString();
+                return new String(end.array, StandardCharsets.UTF_8);
             } else if (end == null) {
-                return start.asString();
+                return new String(start.array, StandardCharsets.UTF_8);
             } else {
-                start.appendArray(end);
-                return start.asString();
+                AppendableByteArray combined = new AppendableByteArray();
+                combined.appendArray(start.array);
+                combined.appendArray(end.array);
+                return combined.asString();
             }
         }
     }
@@ -331,8 +333,8 @@ public class CalculateUnsafeByteBuffer {
         public final byte[] name;
         public int measurements;
         public int total;
-        public int maxT = Integer.MIN_VALUE;
-        public int minT = Integer.MAX_VALUE;
+        public int maxT;
+        public int minT;
         public final int hashCode;
 
         Station(byte[] name, int hash, int temp) {
@@ -340,6 +342,8 @@ public class CalculateUnsafeByteBuffer {
             this.hashCode = hash;
             this.total = temp;
             this.measurements = 1;
+            this.minT = temp;
+            this.maxT = temp;
         }
 
         public void add_measurement(int temp) {
@@ -347,7 +351,7 @@ public class CalculateUnsafeByteBuffer {
             measurements++;
             if (temp > maxT) {
                 maxT = temp;
-            } else if (temp < minT) {
+            }else if (temp < minT) {
                 minT = temp;
             }
         }
@@ -363,12 +367,12 @@ public class CalculateUnsafeByteBuffer {
         }
     }
 
-    // class which takes streams.City entries and stores/updates them
+    // class which takes City entries and stores/updates them
     class ListOfCities extends HashMap<Integer, Station> {
 
         // startFragment is at the start of the block (or the end of the previous block)
-        public AppendableByteArray startFragment;
-        public AppendableByteArray endFragment;
+        public ByteArrayWindow startFragment;
+        public ByteArrayWindow endFragment;
         public int blockNumber;
 
         public ListOfCities(int blockNumber) {
@@ -412,11 +416,69 @@ public class CalculateUnsafeByteBuffer {
 }
 
 /**
+ * Holds the start and end addresses of a substring within a byte array.
+ * Has methods to retrieve copies of the substring where required.
+ * (values are the addresses used in 'unsafe' so can only be used in
+ * the memory access or copy functions there).
+ */
+class ByteArrayWindow {
+    final byte[] buffer;
+    int startIndex;
+    int endIndex;
+    final int blockNumber;
+    byte[] array; // only populated at the very end
+
+    static final Unsafe unsafe;
+    static final int bufferStart;
+
+    static {
+        try {
+            Field unsafeField = Unsafe.class.getDeclaredField("theUnsafe");
+            unsafeField.setAccessible(true);
+            unsafe = (Unsafe) unsafeField.get(null);
+            bufferStart = unsafe.arrayBaseOffset(byte[].class);
+        } catch (NoSuchFieldException | IllegalAccessException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public ByteArrayWindow(byte[] buffer, int startIndex, int blockNumber) {
+        this.buffer = buffer;
+        this.startIndex = startIndex;
+        this.endIndex = startIndex;
+        this.blockNumber = blockNumber;
+    }
+
+
+    void incrementEnd() {
+        endIndex++;
+    }
+
+    ByteArrayWindow getArray() {
+        array = new byte[endIndex - startIndex];
+        unsafe.copyMemory(buffer, startIndex, array, bufferStart, endIndex - startIndex);
+        return this;
+    }
+
+    public void rewind(int bufferPosition) {
+        startIndex = bufferPosition;
+        endIndex = bufferPosition;
+    }
+
+    public int length() {
+        return endIndex - startIndex;
+    }
+}
+
+/**
  * Holds a byte array along with methods to add bytes and concatenate arrays.
+ * Not using it in the main loop any more but still currently using it to build up
+ * the output.
  */
 class AppendableByteArray {
     static final Unsafe unsafe;
     static final int bufferStart;
+
     static {
         try {
             Field unsafeField = Unsafe.class.getDeclaredField("theUnsafe");
@@ -444,28 +506,14 @@ class AppendableByteArray {
         buffer = new byte[INITIAL_BUFF_SIZE];
     }
 
-    AppendableByteArray addByte(byte b) {
+    void addByte(byte b) {
         unsafe.putByte(buffer, bufferStart + length, b);
         length++;
-        return this;
     }
 
-    void appendArray(AppendableByteArray toAppend) {
-//        System.arraycopy(toAppend.buffer, 0, buffer, length, toAppend.length);
-        unsafe.copyMemory(toAppend.buffer, bufferStart, buffer, bufferStart + length, toAppend.length);
-        length += toAppend.length;
-    }
-
-    AppendableByteArray appendArray(byte[] bytes) {
-//        System.arraycopy(bytes, 0, buffer, length, bytes.length);
+    void appendArray(byte[] bytes) {
         unsafe.copyMemory(bytes, bufferStart, buffer, bufferStart + length, bytes.length);
         length += bytes.length;
-        return this;
-    }
-
-
-    void rewind() {
-        length = 0;
     }
 
     public String asString() {
