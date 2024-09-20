@@ -22,7 +22,7 @@ public class CalculateUnsafeByteBuffer {
 
     ExecutorService threadPoolExecutor;
 
-    String file = "measurements.txt";
+    static final String file = "measurements.txt";
 
     final int threads = Runtime.getRuntime().availableProcessors();
     RowFragments rf = new RowFragments();
@@ -63,7 +63,6 @@ public class CalculateUnsafeByteBuffer {
                     if (runningThreads[thread].isDone()) {
                         // thread finished, collect result and re-fill buffer.
                         mergeAndStoreResults((ListOfCities) runningThreads[thread].get(), overallResults);
-
                         doWeStillHaveData = processNextBlock(buffers, thread, blockNumber++, runningThreads, channel);
                     }
                 } // end for threads
@@ -186,28 +185,30 @@ public class CalculateUnsafeByteBuffer {
         }
     }
 
-    boolean loadNextBlock(ByteBuffer buffer, FileChannel channel) throws IOException {
-        if (channel.read(buffer) == -1) {
+    boolean loadNextBlock(ByteBuffer burger, FileChannel channel) throws IOException {
+        if (channel.read(burger) == -1) {
             return false;
         }
-        buffer.flip();
+        burger.flip();
         return true;
     }
 
     class ProcessData {
 
-        static Unsafe unsafe;
-        int blockNumber;
-        ByteBuffer innerBuffer;
+        final int blockNumber;
+        final ByteBuffer innerBuffer;
         int bufferPosition;
-        int limit;
-        byte[] array;
+        final int limit;
+        final byte[] array;
 
+        static Unsafe unsafe;
+        static final int arrayOffset;
         static {
             try {
                 Field unsafeField = Unsafe.class.getDeclaredField("theUnsafe");
                 unsafeField.setAccessible(true);
                 unsafe = (Unsafe) unsafeField.get(null);
+                arrayOffset = unsafe.arrayBaseOffset(byte[].class);
             } catch (NoSuchFieldException | IllegalAccessException e) {
                 throw new RuntimeException(e);
             }
@@ -249,7 +250,10 @@ public class CalculateUnsafeByteBuffer {
                         value.addByte(b);
                     }
                 } else {
-                    results.addCity(name.getBuffer(), fastParseDouble(value.buffer, value.length));
+                    // Copy the name into a byte array
+                    byte[] namearray = new byte[name.length];
+                    unsafe.copyMemory(name.buffer, arrayOffset, namearray,  arrayOffset, name.length);
+                    results.addCity(namearray, fastParseDouble(value.buffer, value.length));
                     name.rewind();
                     value.rewind();
                     readingName = true;
@@ -259,7 +263,7 @@ public class CalculateUnsafeByteBuffer {
             if (name.length > 0) {
                 AppendableByteArray fragment = new AppendableByteArray();
                 fragment.appendArray(name);
-                if (!readingName) {
+                if (!readingName) { // we got as far as the number so add that to the end fragment
                     fragment.addByte((byte) ';');
                     if (value.length > 0) {
                         fragment.appendArray(value);
@@ -411,9 +415,22 @@ public class CalculateUnsafeByteBuffer {
  * Holds a byte array along with methods to add bytes and concatenate arrays.
  */
 class AppendableByteArray {
+    static final Unsafe unsafe;
+    static final int bufferStart;
+    static {
+        try {
+            Field unsafeField = Unsafe.class.getDeclaredField("theUnsafe");
+            unsafeField.setAccessible(true);
+            unsafe = (Unsafe) unsafeField.get(null);
+            bufferStart = unsafe.arrayBaseOffset(byte[].class);
+        } catch (NoSuchFieldException | IllegalAccessException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
     int length;
     byte[] buffer;
-    static int INITIAL_BUFF_SIZE = 40;
+    static final int INITIAL_BUFF_SIZE = 40;
 
     /*
      40 bytes should be enough for anyone, right? The longest place name in the world
@@ -427,22 +444,21 @@ class AppendableByteArray {
         buffer = new byte[INITIAL_BUFF_SIZE];
     }
 
-    byte[] getBuffer() {
-        return Arrays.copyOfRange(buffer, 0, length);
-    }
-
     AppendableByteArray addByte(byte b) {
-        buffer[length++] = b;
+        unsafe.putByte(buffer, bufferStart + length, b);
+        length++;
         return this;
     }
 
     void appendArray(AppendableByteArray toAppend) {
-        System.arraycopy(toAppend.buffer, 0, buffer, length, toAppend.length);
+//        System.arraycopy(toAppend.buffer, 0, buffer, length, toAppend.length);
+        unsafe.copyMemory(toAppend.buffer, bufferStart, buffer, bufferStart + length, toAppend.length);
         length += toAppend.length;
     }
 
     AppendableByteArray appendArray(byte[] bytes) {
-        System.arraycopy(bytes, 0, buffer, length, bytes.length);
+//        System.arraycopy(bytes, 0, buffer, length, bytes.length);
+        unsafe.copyMemory(bytes, bufferStart, buffer, bufferStart + length, bytes.length);
         length += bytes.length;
         return this;
     }
