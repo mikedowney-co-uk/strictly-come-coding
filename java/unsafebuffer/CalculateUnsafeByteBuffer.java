@@ -22,7 +22,7 @@ public class CalculateUnsafeByteBuffer {
 
     ExecutorService threadPoolExecutor;
 
-    String file = "million.txt";
+    String file = "measurements.txt";
 
     final int threads = Runtime.getRuntime().availableProcessors();
     RowFragments rf = new RowFragments();
@@ -127,10 +127,10 @@ public class CalculateUnsafeByteBuffer {
         bytes[length-1] = (byte) ('0' + (number % 10));
         number /= 10;
         bytes[length-2] = '.';
-        bytes[length-3] = (byte) ('0' + (number % 10));;
+        bytes[length-3] = (byte) ('0' + (number % 10));
         if (length >= 4) {
             number /= 10;
-            bytes[length-4] = (byte) ('0' + (number % 10));;
+            bytes[length-4] = (byte) ('0' + (number % 10));
         }
         return bytes;
     }
@@ -196,11 +196,28 @@ public class CalculateUnsafeByteBuffer {
 
     class ProcessData {
 
-        UnsafeBuffer buffer;
+        static Unsafe unsafe;
         int blockNumber;
+        ByteBuffer innerBuffer;
+        int bufferPosition;
+        int limit;
+        byte[] array;
+
+        static {
+            try {
+                Field unsafeField = Unsafe.class.getDeclaredField("theUnsafe");
+                unsafeField.setAccessible(true);
+                unsafe = (Unsafe) unsafeField.get(null);
+            } catch (NoSuchFieldException | IllegalAccessException e) {
+                throw new RuntimeException(e);
+            }
+        }
 
         public ProcessData(ByteBuffer buffer, int blockNumber) {
-            this.buffer = new UnsafeBuffer(buffer);
+            this.innerBuffer = buffer;
+            this.limit = buffer.limit();
+            this.array = buffer.array();
+            this.bufferPosition = unsafe.arrayBaseOffset(byte[].class);
             this.blockNumber = blockNumber;
         }
 
@@ -208,11 +225,11 @@ public class CalculateUnsafeByteBuffer {
             ListOfCities results = new ListOfCities(blockNumber);
             // Read up to the first newline and add it as a fragment (potential end of previous block)
             AppendableByteArray sb = new AppendableByteArray();
-            byte b = buffer.get();
+            byte b = unsafe.getByte(array, bufferPosition++);
             int start = 1;
             while (b != '\n') {
                 sb.addByte(b);
-                b = buffer.get();
+                b = unsafe.getByte(array, bufferPosition++);
                 start++;
             }
             results.startFragment = sb;
@@ -221,8 +238,8 @@ public class CalculateUnsafeByteBuffer {
             AppendableByteArray name = new AppendableByteArray();
             AppendableByteArray value = new AppendableByteArray();
             boolean readingName = true;
-            for (int i = start; i < buffer.limit; i++) {
-                b = buffer.get();
+            for (int i = start; i < limit; i++) {
+                b = unsafe.getByte(array, bufferPosition++);
                 if (b == ';') {
                     readingName = false;
                 } else if (b != '\n') {
@@ -250,7 +267,7 @@ public class CalculateUnsafeByteBuffer {
                 }
                 results.endFragment = fragment;
             }
-            buffer.clear();
+            innerBuffer.clear();
             return results;
         }
     }
@@ -437,57 +454,6 @@ class AppendableByteArray {
 
     public String asString() {
         return new String(buffer, 0, length, StandardCharsets.UTF_8);
-    }
-
-}
-
-class UnsafeBuffer {
-    static Unsafe unsafe;
-    ByteBuffer buffer;
-    int bufferPosition;
-    int limit;
-    byte[] array;
-    int chunkPos;
-    long chunk;
-
-    static {
-        try {
-            Field unsafeField = Unsafe.class.getDeclaredField("theUnsafe");
-            unsafeField.setAccessible(true);
-            unsafe = (Unsafe) unsafeField.get(null);
-        } catch (NoSuchFieldException | IllegalAccessException e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    UnsafeBuffer(ByteBuffer buffer) {
-        this.buffer = buffer;
-        this.limit = buffer.limit();
-        this.array = buffer.array();
-        this.bufferPosition = unsafe.arrayBaseOffset(byte[].class);
-        this.chunkPos = 0;
-        this.chunk = unsafe.getLong(array, bufferPosition);
-    }
-
-    public void clear() {
-        buffer.clear();
-    }
-
-    // This does no range checks, they are the responsibility of the caller
-    // todo: inline this for speed
-    public byte get() {
-        return unsafe.getByte(array, bufferPosition++);
-    }
-
-    public byte _get() {
-        if (chunkPos++ == 7) {
-            chunkPos = 0;
-            chunk = unsafe.getLong(array, bufferPosition);
-        }
-        byte b = (byte) chunk;
-        bufferPosition++;
-        chunk >>= 8;
-        return b;
     }
 
 }
