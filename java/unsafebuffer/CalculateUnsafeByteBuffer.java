@@ -22,7 +22,7 @@ public class CalculateUnsafeByteBuffer {
 
     ExecutorService threadPoolExecutor;
 
-    static final String file = "million.txt";
+    static final String file = "measurements.txt";
 
     final int threads =  Runtime.getRuntime().availableProcessors();
     RowFragments rf;
@@ -65,8 +65,9 @@ public class CalculateUnsafeByteBuffer {
                 for (int thread = 0; thread < threads && doWeStillHaveData; thread++) {
                     if (runningThreads[thread].isDone()) {
                         // thread finished, collect result and re-fill buffer.
-                        mergeAndStoreResults((ListOfCities) runningThreads[thread].get(), overallResults);
+                        ListOfCities resultToAdd = (ListOfCities) runningThreads[thread].get();
                         doWeStillHaveData = processNextBlock(buffers, thread, blockNumber++, runningThreads, channel);
+                        mergeAndStoreResults(resultToAdd, overallResults);
                     }
                 } // end for threads
             } // end while
@@ -246,7 +247,7 @@ public class CalculateUnsafeByteBuffer {
             byte b = unsafe.getByte(array, bufferPosition++);
             int start = 0;
             while (b != '\n') {
-                baw.incrementEnd();
+                baw.endIndex++;
                 b = unsafe.getByte(array, bufferPosition++);
                 start++;
             }
@@ -265,14 +266,14 @@ public class CalculateUnsafeByteBuffer {
                     value.startIndex = bufferPosition;
                 } else if (b != '\n') {
                     if (readingName) {
-                        name.incrementEnd();
+                        name.endIndex++;
                         h = 31 * h + b;
                     } else {
-                        value.incrementEnd();
+                        value.endIndex++;
                     }
                 } else {
                     value.endIndex = bufferPosition - 1;
-                    results.addCity(name, h, fastParseDouble(value.getArray().array, value.length()));
+                    results.addCity(name, h, fastParseDouble(value));
                     name.rewind(bufferPosition);
                     value.rewind(bufferPosition);
                     readingName = true;
@@ -313,6 +314,22 @@ public class CalculateUnsafeByteBuffer {
         }
     }
 
+    static int fastParseDouble(ByteArrayWindow baw) {
+        if (baw.getByte(0) == '-') {
+            if (baw.length() == 4) {
+                return (baw.getByte(1) - '0') * -10 - (baw.getByte(3) - '0');
+            } else {
+                return (baw.getByte(1) - '0') * -100 - (baw.getByte(2) - '0') * 10 - (baw.getByte(4) - '0');
+            }
+        } else {
+            if (baw.length() == 3) {
+                return (baw.getByte(0) - '0') * 10 + (baw.getByte(2) - '0');
+            } else {
+                return (baw.getByte(0) - '0') * 100 + (baw.getByte(1) - '0') * 10 + (baw.getByte(3) - '0');
+            }
+        }
+    }
+
     static class RowFragments {
         // Holds line fragments at the start and end of each block
         Map<Integer, byte[]> lineStarts = new HashMap<>();
@@ -343,7 +360,7 @@ public class CalculateUnsafeByteBuffer {
         }
     }
 
-    class Station {
+    static class Station {
         public final byte[] name;
         public int measurements;
         public int total;
@@ -416,8 +433,8 @@ public class CalculateUnsafeByteBuffer {
             }
         }
 
-        // use the hash pre-calculated in the loop
-        // Reduces the number of array copies.
+        // use the hash pre-calculated in the loop so we only need to access the name
+        // array the first time we see the station.
         void addCity(ByteArrayWindow name, int h, int temperature) {
             Station city = this.get(h);
             if (city != null) {
@@ -472,8 +489,8 @@ class ByteArrayWindow {
         this.endIndex = startIndex;
     }
 
-    void incrementEnd() {
-        endIndex++;
+    public byte getByte(int offset) {
+        return unsafe.getByte(buffer, startIndex + offset);
     }
 
     ByteArrayWindow getArray() {
