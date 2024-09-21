@@ -22,10 +22,10 @@ public class CalculateUnsafeByteBuffer {
 
     ExecutorService threadPoolExecutor;
 
-    static final String file = "measurements.txt";
+    static final String file = "million.txt";
 
-    final int threads = Runtime.getRuntime().availableProcessors();
-    RowFragments rf = new RowFragments();
+    final int threads =  Runtime.getRuntime().availableProcessors();
+    RowFragments rf;
     static final int BUFFERSIZE = 256 * 1024;
     ProcessData[] processors;
 
@@ -41,6 +41,7 @@ public class CalculateUnsafeByteBuffer {
         threadPoolExecutor = Executors.newFixedThreadPool(threads);
         Future<?>[] runningThreads = new Future<?>[threads];
         processors = new ProcessData[threads];
+        rf = new RowFragments();
 
         // Keep a spare buffer at the end to load into in the background
         ByteBuffer[] buffers = new ByteBuffer[threads + 1];
@@ -235,16 +236,12 @@ public class CalculateUnsafeByteBuffer {
             this.limit = buffer.limit();
             this.array = buffer.array();
             this.bufferPosition = unsafe.arrayBaseOffset(byte[].class);
-//            results.startFragment = null;
-//            results.endFragment = null;
-//            results.blockNumber = blockNumber;
         }
 
 
         ListOfCities process() {
             ListOfCities results = new ListOfCities(blockNumber);
             // Read up to the first newline and add it as a fragment (potential end of previous block)
-//            AppendableByteArray sb = new AppendableByteArray();
             ByteArrayWindow baw = new ByteArrayWindow(array, bufferPosition);
             byte b = unsafe.getByte(array, bufferPosition++);
             int start = 0;
@@ -253,7 +250,7 @@ public class CalculateUnsafeByteBuffer {
                 b = unsafe.getByte(array, bufferPosition++);
                 start++;
             }
-            results.startFragment = baw.getArray();
+            results.startFragment = baw.getArray().array;
 
             // Main loop through block, read until we get to the delimiter and the newline
             ByteArrayWindow name = new ByteArrayWindow(array, bufferPosition);
@@ -287,7 +284,7 @@ public class CalculateUnsafeByteBuffer {
                 ByteArrayWindow fragment = new ByteArrayWindow(array,
                         name.startIndex);
                 fragment.endIndex = bufferPosition - 1;
-                results.endFragment = fragment.getArray();
+                results.endFragment = fragment.getArray().array;
             }
             innerBuffer.clear();
 //            System.out.println(blockNumber + ": " + new String(baw.array) + " , " + new String(results.endFragment.array));
@@ -311,9 +308,6 @@ public class CalculateUnsafeByteBuffer {
             if (length == 3) {
                 return (b[0] - '0') * 10 + (b[2] - '0');
             } else {
-                if (length != 4){
-                    System.out.println("OOPS:"+new String(b));
-                }
                 return (b[0] - '0') * 100 + (b[1] - '0') * 10 + (b[3] - '0');
             }
         }
@@ -321,29 +315,29 @@ public class CalculateUnsafeByteBuffer {
 
     static class RowFragments {
         // Holds line fragments at the start and end of each block
-        Map<Integer, ByteArrayWindow> lineStarts = new HashMap<>();
-        Map<Integer, ByteArrayWindow> lineEnds = new HashMap<>();
+        Map<Integer, byte[]> lineStarts = new HashMap<>();
+        Map<Integer, byte[]> lineEnds = new HashMap<>();
 
         // spare characters at the end of a block will be the start of a row in the next block.
-        void addStart(Integer blockNumber, ByteArrayWindow s) {
+        void addStart(Integer blockNumber, byte[] s) {
             lineStarts.put(blockNumber, s);
         }
 
-        void addEnd(Integer blockNumber, ByteArrayWindow s) {
+        void addEnd(Integer blockNumber, byte[] s) {
             lineEnds.put(blockNumber, s);
         }
 
         String getJoinedFragments(int number) {
-            ByteArrayWindow start = lineStarts.get(number);
-            ByteArrayWindow end = lineEnds.get(number);
+            byte[] start = lineStarts.get(number);
+            byte[] end = lineEnds.get(number);
             if (start == null) {
-                return new String(end.array, StandardCharsets.UTF_8);
+                return new String(end, StandardCharsets.UTF_8);
             } else if (end == null) {
-                return new String(start.array, StandardCharsets.UTF_8);
+                return new String(start, StandardCharsets.UTF_8);
             } else {
                 AppendableByteArray combined = new AppendableByteArray();
-                combined.appendArray(start.array);
-                combined.appendArray(end.array);
+                combined.appendArray(start);
+                combined.appendArray(end);
                 return combined.asString();
             }
         }
@@ -391,8 +385,8 @@ public class CalculateUnsafeByteBuffer {
     class ListOfCities extends HashMap<Integer, Station> {
 
         // startFragment is at the start of the block (or the end of the previous block)
-        public ByteArrayWindow startFragment;
-        public ByteArrayWindow endFragment;
+        public byte[] startFragment;
+        public byte[] endFragment;
         public int blockNumber;
 
         public ListOfCities(int blockNumber) {
