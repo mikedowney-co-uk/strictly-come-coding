@@ -88,24 +88,17 @@ public class CalculateUnsafeByteBuffer {
                     new String(c.name, StandardCharsets.UTF_8),
                     c);
         }
-        int count = 0;
-        Station city = null;
+        Station city;
         for (Map.Entry<String, Station> e : sortedCities.entrySet()) {
             city = e.getValue();
             AppendableByteArray output = new AppendableByteArray();
-            output.addByte((byte) ';');
+            output.addDelimiter();
             output.appendArray(fastNumberToString(city.minT));
-            output.addByte((byte) ';');
+            output.addDelimiter();
             // todo: sort out average calculation rounding errors using ints..
             output.appendArray(String.format("%.1f;", city.total / (city.measurements * 10.0)).getBytes(StandardCharsets.UTF_8));
             output.appendArray(fastNumberToString(city.maxT));
-//            System.out.printf("%s=%.1f/%.1f/%.1f\n",
-//                    e.getKey(),
-//                    city.minT/10.0,
-//                    city.total / (city.measurements * 10.0),
-//                    city.maxT/10.0);
             System.out.print(e.getKey());
-//            System.out.print(" ("+city.measurements+") ");
             System.out.println(output.asString());
         }
     }
@@ -235,8 +228,6 @@ public class CalculateUnsafeByteBuffer {
          * Re-use the ProcessData class by calling this instead of instantiating a fresh
          * one each time.
          *
-         * @param buffer
-         * @param blockNumber
          */
         public void reset(ByteBuffer buffer, int blockNumber) {
             this.blockNumber = blockNumber;
@@ -543,8 +534,8 @@ class AppendableByteArray {
         buffer = new byte[INITIAL_BUFF_SIZE];
     }
 
-    void addByte(byte b) {
-        unsafe.putByte(buffer, bufferStart + length, b);
+    void addDelimiter() {
+        unsafe.putByte(buffer, bufferStart + length, (byte) ';');
         length++;
     }
 
