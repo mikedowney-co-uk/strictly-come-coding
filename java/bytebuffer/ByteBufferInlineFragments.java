@@ -30,7 +30,7 @@ public class ByteBufferInlineFragments {
         long startTime = System.currentTimeMillis();
         new ByteBufferInlineFragments().go();
         long endTime = System.currentTimeMillis();
-        System.out.println("Took " + (endTime - startTime) / 1000 + " s");
+        System.out.printf("Took %.2f s\n", (endTime - startTime) / 1000.0);
     }
 
     private void go() throws IOException, ExecutionException, InterruptedException {
@@ -272,7 +272,7 @@ public class ByteBufferInlineFragments {
         }
     }
 
-    class Station {
+    static class Station {
         public final byte[] name;
         public int measurements = 1;
         public double total;

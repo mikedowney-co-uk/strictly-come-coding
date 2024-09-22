@@ -16,7 +16,7 @@ public class CalculateByteBufferCharArray {
 
     ExecutorService threadPoolExecutor;
 
-    String file = "million.txt";
+    String file = "measurements.txt";
 
     final int threads = Runtime.getRuntime().availableProcessors();
     RowFragments rf = new RowFragments();
@@ -26,7 +26,7 @@ public class CalculateByteBufferCharArray {
         long startTime = System.currentTimeMillis();
         new CalculateByteBufferCharArray().go();
         long endTime = System.currentTimeMillis();
-        System.out.println("Took " + (endTime - startTime) / 1000 + " s");
+        System.out.printf("Took %.2f s\n", (endTime - startTime) / 1000.0);
     }
 
     private void go() throws IOException, ExecutionException, InterruptedException {
@@ -232,7 +232,7 @@ public class CalculateByteBufferCharArray {
         }
     }
 
-    class RowFragments {
+    static class RowFragments {
         // Holds line fragments at the start and end of each block
         ConcurrentHashMap<Integer, _AppendableByteArray> lineStarts = new ConcurrentHashMap<>();
         ConcurrentHashMap<Integer, _AppendableByteArray> lineEnds = new ConcurrentHashMap<>();
@@ -262,7 +262,7 @@ public class CalculateByteBufferCharArray {
         }
     }
 
-    class Station {
+    static class Station {
         public final byte[] name;
         public int measurements = 1;
         public double total;

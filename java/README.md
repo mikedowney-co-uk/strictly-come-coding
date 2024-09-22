@@ -58,4 +58,10 @@ stored and processed separately at the end.
 
 This version takes 20 seconds to run.
 
+### 3. A version of the above but using sun.misc.unsafe
 
+This is based on the `ByteBuffer` version but uses _unsafe_ to directly read arrays.
+There are additional optimisations where methods are inlined or references to buffer
+slices are used instead of making copies of arrays.
+
+After several rounds of profiling and optimising, this runs in less than 12 seconds.

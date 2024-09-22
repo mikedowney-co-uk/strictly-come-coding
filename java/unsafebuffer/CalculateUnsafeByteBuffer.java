@@ -33,7 +33,7 @@ public class CalculateUnsafeByteBuffer {
         long startTime = System.currentTimeMillis();
         new CalculateUnsafeByteBuffer().go();
         long endTime = System.currentTimeMillis();
-        System.out.println("Took " + (endTime - startTime) / 1000 + " s");
+        System.out.printf("Took %.2f s\n", (endTime - startTime) / 1000.0);
     }
 
     private void go() throws IOException, ExecutionException, InterruptedException {
@@ -196,7 +196,7 @@ public class CalculateUnsafeByteBuffer {
         return true;
     }
 
-    class ProcessData {
+    static class ProcessData {
 
         int blockNumber;
         ByteBuffer innerBuffer;
@@ -399,7 +399,7 @@ public class CalculateUnsafeByteBuffer {
     }
 
     // class which takes City entries and stores/updates them
-    class ListOfCities extends HashMap<Integer, Station> {
+    static class ListOfCities extends HashMap<Integer, Station> {
 
         // startFragment is at the start of the block (or the end of the previous block)
         public byte[] startFragment;

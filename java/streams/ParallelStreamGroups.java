@@ -10,13 +10,13 @@ import java.util.stream.Stream;
 
 public class ParallelStreamGroups {
 
-    String file = "million.txt";
+    String file = "measurements.txt";
 
     public static void main(String[] args) throws IOException {
         long startTime = System.currentTimeMillis();
         new ParallelStreamGroups().go();
         long endTime = System.currentTimeMillis();
-        System.out.println("Took " + (endTime - startTime) / 1000 + " s");
+        System.out.printf("Took %.2f s\n", (endTime - startTime) / 1000.0);
     }
     private void go() throws IOException {
         try (Stream<String> lines = Files.lines(Path.of(file))) {
@@ -29,7 +29,7 @@ public class ParallelStreamGroups {
                                             CityCollector.toCityList())
                             ).values());
             for (City city : overallResults) {
-                System.out.printf("%s=%.1f/%.1f/%.1f\n",
+                System.out.printf("%s;%.1f;%.1f;%.1f\n",
                         city.name,
                         city.minT,
                         city.total / city.measurements,
