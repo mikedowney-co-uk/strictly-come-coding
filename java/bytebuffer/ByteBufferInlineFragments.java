@@ -310,7 +310,7 @@ public class ByteBufferInlineFragments {
     }
 
     // class which takes City entries and stores/updates them
-    class ListOfCities extends HashMap<Integer, Station> {
+    static class ListOfCities extends HashMap<Integer, Station> {
 
         // startFragment is at the start of the block (or the end of the previous block)
         public AppendableByteArray startFragment;

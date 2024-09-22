@@ -302,7 +302,7 @@ public class CalculateByteBufferCharArray {
     }
 
     // class which takes City entries and stores/updates them
-    class ListOfCities extends HashMap<Integer, Station> {
+    static class ListOfCities extends HashMap<Integer, Station> {
 
         // Only called at the end on the line fragments - doesn't need to be as optimised
         void addCity(String line) {
