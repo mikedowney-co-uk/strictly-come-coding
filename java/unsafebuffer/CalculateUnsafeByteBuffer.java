@@ -24,19 +24,19 @@ public class CalculateUnsafeByteBuffer {
 
     static final String file = "measurements.txt";
 
-    final int threads =  Runtime.getRuntime().availableProcessors();
+    final int threads = Runtime.getRuntime().availableProcessors();
     RowFragments rf;
     static final int BUFFERSIZE = 1024 * 1024;
     ProcessData[] processors;
 
-    public static void main(String[] args) throws IOException, ExecutionException, InterruptedException {
+    public static void main(String[] args) throws Exception {
         long startTime = System.currentTimeMillis();
         new CalculateUnsafeByteBuffer().go();
         long endTime = System.currentTimeMillis();
         System.out.printf("Took %.2f s\n", (endTime - startTime) / 1000.0);
     }
 
-    private void go() throws IOException, ExecutionException, InterruptedException {
+    private void go() throws Exception {
         System.out.println("Using " + threads + " cores");
         threadPoolExecutor = Executors.newFixedThreadPool(threads);
         Future<?>[] runningThreads = new Future<?>[threads];
@@ -103,9 +103,10 @@ public class CalculateUnsafeByteBuffer {
             System.out.print(e.getKey());
             System.out.println(output.asString());
         }
-        assert sortedCities.size() == 413;
+        System.out.println("length = " + sortedCities.size());
+        assert (sortedCities.size() == 413);
         assert city.minT == -290;
-        assert city.maxT == 67.5;
+        assert city.maxT == 675;
     }
 
     static byte[] fastNumberToString(int number) {
@@ -140,7 +141,7 @@ public class CalculateUnsafeByteBuffer {
 //        Set<Integer> allFragments = new HashSet<>(rf.lineStarts.keySet());
 //        allFragments.addAll(rf.lineEnds.keySet());
 //        System.out.println("Fragments: " + allFragments.size());
-        for (int f=0 ; f<NUM_BLOCKS; f++) {
+        for (int f = 0; f < NUM_BLOCKS; f++) {
             String line = rf.getJoinedFragments(f);
             if (!line.isEmpty()) {
                 overallResults.addCity(line);
@@ -232,7 +233,6 @@ public class CalculateUnsafeByteBuffer {
         /**
          * Re-use the ProcessData class by calling this instead of instantiating a fresh
          * one each time.
-         *
          */
         public void reset(ByteBuffer buffer, int blockNumber) {
             this.blockNumber = blockNumber;
@@ -336,31 +336,37 @@ public class CalculateUnsafeByteBuffer {
 
     // text file is >13Gb
     static final int NUM_BLOCKS = (int) (14_000_000_000L / BUFFERSIZE);
+
     static class RowFragments {
         // Holds line fragments at the start and end of each block
-//        Map<Integer, byte[]> lineStarts = new HashMap<>();
-        List<byte[]> lineEnds = new ArrayList<>(NUM_BLOCKS);
-        List<byte[]> lineStarts = new ArrayList<>(NUM_BLOCKS);
+//        List<byte[]> lineEnds = new ArrayList<>(NUM_BLOCKS);
+//        List<byte[]> lineStarts = new ArrayList<>(NUM_BLOCKS);
+        byte[][] lineEnds = new byte[NUM_BLOCKS][];
+        byte[][] lineStarts = new byte[NUM_BLOCKS][];
 
         public RowFragments() {
-            for (int i = 0; i < NUM_BLOCKS; i++) {
-                lineStarts.add(null);
-                lineEnds.add(null);
-            }
+//            for (int i = 0; i < NUM_BLOCKS; i++) {
+//                lineStarts.add(null);
+//                lineEnds.add(null);
+//            }
         }
 
         // spare characters at the end of a block will be the start of a row in the next block.
         void addStart(Integer blockNumber, byte[] s) {
-            lineStarts.set(blockNumber, s);
+//            lineStarts.set(blockNumber, s);
+            lineStarts[blockNumber] = s;
         }
 
         void addEnd(Integer blockNumber, byte[] s) {
-            lineEnds.set(blockNumber, s);
+//            lineEnds.set(blockNumber, s);
+            lineEnds[blockNumber] = s;
         }
 
         String getJoinedFragments(int number) {
-            byte[] start = lineStarts.get(number);
-            byte[] end = lineEnds.get(number);
+//            byte[] start = lineStarts.get(number);
+//            byte[] end = lineEnds.get(number);
+            byte[] start = lineStarts[number];
+            byte[] end = lineEnds[number];
             if (start == null && end == null) {
                 return "";
             } else if (start == null) {
@@ -414,35 +420,8 @@ public class CalculateUnsafeByteBuffer {
         }
     }
 
-    static class UniqueKeyMap {
-        // The hash of the names fits comfortably in the array without collisions
-        public static final int HASH_SPACE = 4096;
-        // stores the position in the table where the full hash is kept
-        Station[] table = new Station[HASH_SPACE];
-
-        public Station put(int key, Station value) {
-            table[key & (HASH_SPACE - 1)] = value;
-            return value;
-        }
-
-        public Station get(int key) {
-            return table[key & (HASH_SPACE - 1)];
-        }
-
-        public Iterable<Integer> keySet() {
-            Set<Integer> s = new HashSet<>();
-            for (int i = 0; i < HASH_SPACE; i++) {
-                if (table[i] != null) {
-                    s.add(i);
-                }
-            }
-            return s;
-        }
-    }
-
     // class which takes City entries and stores/updates them
-//    static class ListOfCities extends HashMap<Integer, Station> {
-    static class ListOfCities extends UniqueKeyMap {
+    static class ListOfCities extends HashMap<Integer, Station> {
 
         // startFragment is at the start of the block (or the end of the previous block)
         public byte[] startFragment;
@@ -450,7 +429,7 @@ public class CalculateUnsafeByteBuffer {
         public int blockNumber;
 
         public ListOfCities(int blockNumber) {
-//            super();
+            super(512);
             this.blockNumber = blockNumber;
         }
 
@@ -468,27 +447,23 @@ public class CalculateUnsafeByteBuffer {
             for (byte b : name) {
                 h = 31 * h + b;
             }
-//            Station city = this.get(h);
-            // if using UniqueKeyMap:
-            Station city = table[h & (HASH_SPACE - 1)];
+            Station city = this.get(h);
+
             if (city != null) {
                 city.add_measurement(temperature);
             } else {
-//                this.put(h, new Station(name, h, temperature));
-                table[h & (HASH_SPACE - 1)] = new Station(name, h, temperature);
+                this.put(h, new Station(name, h, temperature));
             }
         }
 
         // use the hash pre-calculated in the loop so we only need to access the name
         // array the first time we see the station.
         void addCity(ByteArrayWindow name, int h, int temperature) {
-//            Station city = this.get(h);
-            Station city = table[h & (HASH_SPACE - 1)];
+            Station city = this.get(h);
             if (city != null) {
                 city.add_measurement(temperature);
             } else {
-//                this.put(h, new Station(name.getArray().array, h, temperature));
-                table[h & (HASH_SPACE - 1)] = new Station(name.getArray().array, h, temperature);
+                this.put(h, new Station(name.getArray().array, h, temperature));
             }
         }
 

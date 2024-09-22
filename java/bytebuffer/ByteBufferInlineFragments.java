@@ -156,7 +156,7 @@ public class ByteBufferInlineFragments {
         return true;
     }
 
-    class ProcessData {
+    static class ProcessData {
 
         ByteBuffer buffer;
         int blockNumber;
