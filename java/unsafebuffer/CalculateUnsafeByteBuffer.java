@@ -176,8 +176,9 @@ public class CalculateUnsafeByteBuffer {
         if (resultToAdd.startFragment != null) {
             rf.addEnd(resultToAdd.blockNumber, resultToAdd.startFragment);
         }
-        for (Integer hash : resultToAdd.keySet()) {
-            overallResults.mergeCity(resultToAdd.get(hash));
+        for (int hash : resultToAdd.keySet()) {
+            Station c1 = resultToAdd.get(hash);
+            overallResults.mergeCity(c1);
         }
     }
 
@@ -420,16 +421,81 @@ public class CalculateUnsafeByteBuffer {
         }
     }
 
-    // class which takes City entries and stores/updates them
-    static class ListOfCities extends HashMap<Integer, Station> {
 
+    static class ArrayMap {
+        public record MapEntry(int hash, Station value) {}
+        static final int HASH_SPACE = 8192;
+        static final int COLLISION = 2;
+        public MapEntry[] records = new MapEntry[HASH_SPACE + COLLISION];
+
+        public Station get(int key) {
+            int hash = key & (HASH_SPACE - 1);
+            MapEntry entry = records[hash];
+            if (entry != null && entry.hash == key) {
+                return entry.value;
+            }
+            if (entry == null) {
+                return null;
+            }
+
+            entry = records[hash + 1];
+            if (entry == null) {
+                return null;
+            }
+            if (entry.hash == key) {
+                return entry.value;
+            }
+
+            entry = records[hash + 2];
+            if (entry == null) {
+                return null;
+            }
+            if (entry.hash == key) {
+                return entry.value;
+            }
+            throw new RuntimeException("Map Collision Error (get)");
+        }
+
+        public void put(int key, Station value) {
+            int hash = key & (HASH_SPACE - 1);
+            // Search forwards checking for gaps or replacements
+            for (int i = hash; i < hash + COLLISION; i++) {
+                if (records[i] == null) {
+                    records[i] = new MapEntry(key, value);
+                    return;
+                }
+                // replace existing value (this shouldn't happen here)
+//                MapEntry entry = records[i];
+//                if (entry.hash == key) {
+//                    records[i] = new MapEntry(key, value);
+//                    throw new RuntimeException("Map Replacement Error");
+//                }
+            }
+            throw new RuntimeException("Map Collision Error (put)");
+        }
+
+        public Iterable<Integer> keySet() {
+            Set<Integer> s = new HashSet<>();
+            for (int i = 0; i < HASH_SPACE; i++) {
+                if (records[i] != null) {
+                    s.add(records[i].hash);
+                }
+            }
+            return s;
+        }
+    }
+
+
+    // class which takes City entries and stores/updates them
+//    static class ListOfCities extends HashMap<Integer, Station> {
+    static class ListOfCities extends ArrayMap {
         // startFragment is at the start of the block (or the end of the previous block)
         public byte[] startFragment;
         public byte[] endFragment;
         public int blockNumber;
 
         public ListOfCities(int blockNumber) {
-            super(512);
+//            super(512);
             this.blockNumber = blockNumber;
         }
 
@@ -459,6 +525,9 @@ public class CalculateUnsafeByteBuffer {
         // use the hash pre-calculated in the loop so we only need to access the name
         // array the first time we see the station.
         void addCity(ByteArrayWindow name, int h, int temperature) {
+//            if (h == 1272579786){
+//                System.out.println("wait");
+//            }
             Station city = this.get(h);
             if (city != null) {
                 city.add_measurement(temperature);
