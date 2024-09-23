@@ -2,20 +2,21 @@ package unsafebuffer;
 
 import sun.misc.Unsafe;
 
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.lang.reflect.Field;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
-import java.util.*;
-import java.util.concurrent.ExecutionException;
+import java.util.Map;
+import java.util.TreeMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
 /**
- * Reads the file into a set of ByteByffers
+ * Reads the file into a set of ByteBuffers
  * Use byte arrays instead of Strings for the City names.
  */
 public class CalculateUnsafeByteBuffer {
@@ -43,53 +44,49 @@ public class CalculateUnsafeByteBuffer {
         processors = new ProcessData[threads];
         rf = new RowFragments();
 
-        // Keep a spare buffer at the end to load into in the background
-        ByteBuffer[] buffers = new ByteBuffer[threads + 1];
-
-        try (RandomAccessFile aFile = new RandomAccessFile(file, "r");
-             FileChannel channel = aFile.getChannel()) {
-
-            launchInitialProcesses(buffers, channel, runningThreads);
-
-            // Load the next block in advance, ready for when a thread finishes.
-            buffers[threads] = ByteBuffer.allocate(BUFFERSIZE);
-            boolean doWeStillHaveData = loadNextBlock(buffers[threads], channel);
-            System.out.println("Loaded data");
-
-            int blockNumber = threads; // keep track of which block we are processing
-            ListOfCities overallResults = new ListOfCities(0);
-            while (doWeStillHaveData) {
-
-                // go through the executors, check if any have finished and
-                // re-fill any which have
-                for (int thread = 0; thread < threads && doWeStillHaveData; thread++) {
-                    if (runningThreads[thread].isDone()) {
-                        // thread finished, collect result and re-fill buffer.
-                        ListOfCities resultToAdd = (ListOfCities) runningThreads[thread].get();
-                        doWeStillHaveData = processNextBlock(buffers, thread, blockNumber++, runningThreads, channel);
-                        mergeAndStoreResults(resultToAdd, overallResults);
-                    }
-                } // end for threads
-            } // end while
-
-            waitForThreads(runningThreads, overallResults);
-
-            processFragments(overallResults);
-            sortAndDisplay(overallResults);
-            threadPoolExecutor.shutdown();
-            threadPoolExecutor.close();
-        } catch (NoSuchFieldException | IllegalAccessException e) {
-            throw new RuntimeException(e);
+        for (int i = 0; i < threads; i++) {
+            processors[i] = new ProcessData(ByteBuffer.allocate(BUFFERSIZE), i);
         }
+        boolean doWeStillHaveData = true;
+        int blockNumber = 0;
+
+        while (doWeStillHaveData) {
+            for (int thread = 0; thread < threads && doWeStillHaveData; thread++) {
+                if (runningThreads[thread] == null) {
+                    ProcessData p = processors[thread];
+                    p.blockNumber = blockNumber++;
+                    runningThreads[thread] = threadPoolExecutor.submit(p::process);
+                } else if (runningThreads[thread].isDone()) {
+                    // thread finished, collect result
+                    ListOfCities resultToAdd = (ListOfCities) runningThreads[thread].get();
+                    if (resultToAdd != null) {
+                        storeFragments(resultToAdd);
+                    } else {
+                        doWeStillHaveData = false;
+                    }
+                    runningThreads[thread] = null;
+                }
+            } // end for threads
+        } // end while
+
+        ListOfCities overallResults = new ListOfCities(0);
+        waitForThreads(runningThreads, overallResults);
+
+        processFragments(overallResults);
+        sortAndDisplay(overallResults);
+        threadPoolExecutor.shutdown();
+        threadPoolExecutor.close();
     }
 
     private static void sortAndDisplay(ListOfCities overallResults) {
         TreeMap<String, Station> sortedCities = new TreeMap<>();
-        for (Integer hash : overallResults.keySet()) {
-            Station c = overallResults.get(hash);
-            sortedCities.put(
-                    new String(c.name, StandardCharsets.UTF_8),
-                    c);
+        for (ListOfCities.MapEntry m : overallResults.records) {
+            if (m != null) {
+                Station c = m.value;
+                sortedCities.put(
+                        new String(c.name, StandardCharsets.UTF_8),
+                        c);
+            }
         }
         Station city = null;
         for (Map.Entry<String, Station> e : sortedCities.entrySet()) {
@@ -109,6 +106,7 @@ public class CalculateUnsafeByteBuffer {
         assert (sortedCities.size() == 413);
         assert city.minT == -290;
         assert city.maxT == 675;
+        assert city.measurements == 2420468;
     }
 
     static byte[] fastNumberToString(int number) {
@@ -140,9 +138,6 @@ public class CalculateUnsafeByteBuffer {
     }
 
     private void processFragments(ListOfCities overallResults) {
-//        Set<Integer> allFragments = new HashSet<>(rf.lineStarts.keySet());
-//        allFragments.addAll(rf.lineEnds.keySet());
-//        System.out.println("Fragments: " + allFragments.size());
         for (int f = 0; f < NUM_BLOCKS; f++) {
             String line = rf.getJoinedFragments(f);
             if (!line.isEmpty()) {
@@ -151,23 +146,21 @@ public class CalculateUnsafeByteBuffer {
         }
     }
 
-    private boolean processNextBlock(ByteBuffer[] buffers, int i, int blockNumber, Future<?>[] runningThreads, FileChannel channel) throws IOException, NoSuchFieldException, IllegalAccessException {
-        // last buffer should have pre-loaded data, swap that into the current slot
-        // and refill the previous one.
-        ByteBuffer b = buffers[threads];
-        buffers[threads] = buffers[i];
-        buffers[i] = b;
-        ProcessData p = processors[i];
-        p.reset(b, blockNumber);
-
-        runningThreads[i] = threadPoolExecutor.submit(p::process);
-        // load data into the spare buffer ready for the next thread
-        return loadNextBlock(buffers[threads], channel);
+    private void waitForThreads(Future<?>[] runningThreads, ListOfCities overallResults) throws Exception {
+        for (int i = 0; i < threads; i++) {
+            if (runningThreads[i] != null) {
+                mergeAndStoreResults((ListOfCities) runningThreads[i].get(), overallResults);
+            }
+            processors[i].close();
+        }
     }
 
-    private void waitForThreads(Future<?>[] runningThreads, ListOfCities overallResults) throws InterruptedException, ExecutionException {
-        for (int i = 0; i < threads; i++) {
-            mergeAndStoreResults((ListOfCities) runningThreads[i].get(), overallResults);
+    private void storeFragments(ListOfCities resultToAdd) {
+        if (resultToAdd.endFragment != null) {
+            rf.addStart(resultToAdd.blockNumber + 1, resultToAdd.endFragment);
+        }
+        if (resultToAdd.startFragment != null) {
+            rf.addEnd(resultToAdd.blockNumber, resultToAdd.startFragment);
         }
     }
 
@@ -178,41 +171,27 @@ public class CalculateUnsafeByteBuffer {
         if (resultToAdd.startFragment != null) {
             rf.addEnd(resultToAdd.blockNumber, resultToAdd.startFragment);
         }
-        for (int hash : resultToAdd.keySet()) {
-            Station c1 = resultToAdd.get(hash);
-            overallResults.mergeCity(c1);
+        for (ListOfCities.MapEntry m : resultToAdd.records) {
+            if (m != null) {
+                overallResults.mergeCity(m.value);
+            }
         }
-    }
-
-    private void launchInitialProcesses(ByteBuffer[] buffers, FileChannel channel, Future<?>[] whatsRunning) throws IOException, NoSuchFieldException, IllegalAccessException {
-        for (int i = 0; i < threads; i++) {
-            ByteBuffer b = ByteBuffer.allocate(BUFFERSIZE);
-            buffers[i] = b;
-            loadNextBlock(b, channel);
-            ProcessData p = new ProcessData(b, i);
-            processors[i] = p;
-            whatsRunning[i] = threadPoolExecutor.submit(p::process);
-        }
-    }
-
-    boolean loadNextBlock(ByteBuffer burger, FileChannel channel) throws IOException {
-        if (channel.read(burger) == -1) {
-            return false;
-        }
-        burger.flip();
-        return true;
     }
 
     static class ProcessData {
 
-        int blockNumber;
         ByteBuffer innerBuffer;
+        RandomAccessFile raFile;
+        FileChannel channel;
+
+        int blockNumber;
         int bufferPosition;
         int limit;
         byte[] array;
 
         static Unsafe unsafe;
         static final int arrayOffset;
+        ListOfCities results = new ListOfCities(blockNumber);
 
         static {
             try {
@@ -225,30 +204,36 @@ public class CalculateUnsafeByteBuffer {
             }
         }
 
-        public ProcessData(ByteBuffer buffer, int blockNumber) {
+        public ProcessData(ByteBuffer buffer, int blockNumber) throws FileNotFoundException {
             this.innerBuffer = buffer;
             this.limit = buffer.limit();
             this.array = buffer.array();
             this.bufferPosition = unsafe.arrayBaseOffset(byte[].class);
             this.blockNumber = blockNumber;
+            this.raFile = new RandomAccessFile(file, "r");
+            this.channel = raFile.getChannel();
         }
 
-        /**
-         * Re-use the ProcessData class by calling this instead of instantiating a fresh
-         * one each time.
-         */
-        public void reset(ByteBuffer buffer, int blockNumber) {
-            this.blockNumber = blockNumber;
-            this.innerBuffer = buffer;
-            this.limit = buffer.limit();
-            this.array = buffer.array();
+        public void close() throws IOException {
+            channel.close();
+            raFile.close();
+        }
+
+        ListOfCities process() throws IOException {
+            channel.position((long) blockNumber * BUFFERSIZE);
+            int status = channel.read(innerBuffer);
+            if (status == -1) {
+                return null;
+            }
+            innerBuffer.flip();
+
+            this.limit = innerBuffer.limit();
+            this.array = innerBuffer.array();
             this.bufferPosition = unsafe.arrayBaseOffset(byte[].class);
-        }
+            this.results.blockNumber = blockNumber;
+            this.results.startFragment = null;
+            this.results.endFragment = null;
 
-
-        ListOfCities process() {
-
-            ListOfCities results = new ListOfCities(blockNumber);
             // Read up to the first newline and add it as a fragment (potential end of previous block)
             ByteArrayWindow baw = new ByteArrayWindow(array, bufferPosition);
             byte b = unsafe.getByte(array, bufferPosition++);
@@ -260,27 +245,26 @@ public class CalculateUnsafeByteBuffer {
             }
             results.startFragment = baw.getArray().array;
 
-            // Main loop through block, read until we get to the delimiter and the newline
+            // Main loop through block
             ByteArrayWindow name = new ByteArrayWindow(array, bufferPosition);
             ByteArrayWindow value = new ByteArrayWindow(array, bufferPosition);
             boolean readingName = true;
             int h = 0;
             for (int i = start; i < limit; i++) {
                 b = unsafe.getByte(array, bufferPosition++);
+                // read until we get to the delimiter and the newline
                 if (b == ';') {
                     readingName = false;
                     name.endIndex = bufferPosition - 1;
                     value.startIndex = bufferPosition;
                 } else if (readingName) {
-                        name.endIndex++;
-                        h = 31 * h + b;
-                } else if (b != '\n') {{
-                        value.endIndex++;
-                    }
-                } else {
+                    name.endIndex++;
+                    h = 31 * h + b;
+                } else if (b != '\n') {
+                    value.endIndex++;
+                } else {    // end of line
                     value.endIndex = bufferPosition - 1;
-                    int temperature = fastParseDouble(value);
-                    results.addOrMerge(h, name, temperature);
+                    results.addOrMerge(h, name, fastParseDouble(value));
                     name.rewind(bufferPosition);
                     value.rewind(bufferPosition);
                     readingName = true;
@@ -289,19 +273,17 @@ public class CalculateUnsafeByteBuffer {
             } // end for
             // If we get to the end and there is still data left, add it to the fragments as the start of the next block
             if (name.length() > 0) {
-                ByteArrayWindow fragment = new ByteArrayWindow(array,
-                        name.startIndex);
+                ByteArrayWindow fragment = new ByteArrayWindow(array, name.startIndex);
                 fragment.endIndex = bufferPosition - 1;
                 results.endFragment = fragment.getArray().array;
             }
             innerBuffer.clear();
-//            System.out.println(blockNumber + ": " + new String(baw.array) + " , " + new String(results.endFragment.array));
             return results;
         }
     }
 
     /**
-     * Parse a byte array into a double without having to go through a String first
+     * Parse a byte array into a number without having to go through a String first
      * All the numbers are [-]d{1,2}.d so can take shortcuts with location of decimal place etc.
      * Returns 10* the actual number
      */
@@ -341,33 +323,19 @@ public class CalculateUnsafeByteBuffer {
     static final int NUM_BLOCKS = (int) (14_000_000_000L / BUFFERSIZE);
 
     static class RowFragments {
-        // Holds line fragments at the start and end of each block
-//        List<byte[]> lineEnds = new ArrayList<>(NUM_BLOCKS);
-//        List<byte[]> lineStarts = new ArrayList<>(NUM_BLOCKS);
         byte[][] lineEnds = new byte[NUM_BLOCKS][];
         byte[][] lineStarts = new byte[NUM_BLOCKS][];
 
-        public RowFragments() {
-//            for (int i = 0; i < NUM_BLOCKS; i++) {
-//                lineStarts.add(null);
-//                lineEnds.add(null);
-//            }
-        }
-
         // spare characters at the end of a block will be the start of a row in the next block.
         void addStart(Integer blockNumber, byte[] s) {
-//            lineStarts.set(blockNumber, s);
             lineStarts[blockNumber] = s;
         }
 
         void addEnd(Integer blockNumber, byte[] s) {
-//            lineEnds.set(blockNumber, s);
             lineEnds[blockNumber] = s;
         }
 
         String getJoinedFragments(int number) {
-//            byte[] start = lineStarts.get(number);
-//            byte[] end = lineEnds.get(number);
             byte[] start = lineStarts[number];
             byte[] end = lineEnds[number];
             if (start == null && end == null) {
@@ -426,13 +394,16 @@ public class CalculateUnsafeByteBuffer {
 
     // class which takes City entries and stores/updates them
     static class ListOfCities {
-        public record MapEntry(int hash, Station value) {}
+        public record MapEntry(int hash, Station value) {
+        }
+
         static final int HASH_SPACE = 8192;
         static final int COLLISION = 2;
         public MapEntry[] records = new MapEntry[HASH_SPACE + COLLISION];
 
         public Station get(int key) {
             int hash = key & (HASH_SPACE - 1);
+            // unrolled loop looking for the entry
             MapEntry entry = records[hash];
             if (entry != null && entry.hash == key) {
                 return entry.value;
@@ -441,7 +412,7 @@ public class CalculateUnsafeByteBuffer {
                 return null;
             }
 
-            entry = records[hash + 1];
+            entry = records[++hash];
             if (entry == null) {
                 return null;
             }
@@ -449,7 +420,7 @@ public class CalculateUnsafeByteBuffer {
                 return entry.value;
             }
 
-            entry = records[hash + 2];
+            entry = records[++hash];
             if (entry == null) {
                 return null;
             }
@@ -461,26 +432,21 @@ public class CalculateUnsafeByteBuffer {
 
         public void put(int key, Station value) {
             int hash = key & (HASH_SPACE - 1);
-            // Search forwards checking for gaps or replacements
-            for (int i = hash; i < hash + COLLISION; i++) {
-                if (records[i] == null) {
-                    records[i] = new MapEntry(key, value);
-                    return;
-                }
+            // Search forwards checking for gaps. We never replace existing values.
+            if (records[hash] == null) {
+                records[hash] = new MapEntry(key, value);
+                return;
+            }
+            if (records[++hash] == null) {
+                records[hash] = new MapEntry(key, value);
+                return;
+            }
+            if (records[++hash] == null) {
+                records[hash] = new MapEntry(key, value);
+                return;
             }
             throw new RuntimeException("Map Collision Error (put)");
         }
-
-        public Iterable<Integer> keySet() {
-            Set<Integer> s = new HashSet<>();
-            for (int i = 0; i < HASH_SPACE + COLLISION; i++) {
-                if (records[i] != null) {
-                    s.add(records[i].hash);
-                }
-            }
-            return s;
-        }
-
 
         // startFragment is at the start of the block (or the end of the previous block)
         public byte[] startFragment;
@@ -495,11 +461,9 @@ public class CalculateUnsafeByteBuffer {
         void addCity(String line) {
             String[] bits = line.split(";");
             byte[] number = bits[1].getBytes(StandardCharsets.UTF_8);
-            addCity(bits[0].getBytes(StandardCharsets.UTF_8),
-                    fastParseDouble(number, number.length));
-        }
+            byte[] name = bits[0].getBytes(StandardCharsets.UTF_8);
+            int temperature = fastParseDouble(number, number.length);
 
-        void addCity(byte[] name, int temperature) {
             // inlined hashcode for tiny speed increase
             int h = 0;
             for (byte b : name) {
@@ -528,7 +492,6 @@ public class CalculateUnsafeByteBuffer {
                 records[hash] = new MapEntry(key, new Station(name.getArray().array, key, temperature));
                 return;
             }
-            // replace existing value (this shouldn't happen here)
             MapEntry entry = records[hash];
             if (entry.hash == key) {
                 entry.value.add_measurement(temperature);
@@ -539,7 +502,7 @@ public class CalculateUnsafeByteBuffer {
                 records[hash] = new MapEntry(key, new Station(name.getArray().array, key, temperature));
                 return;
             }
-            // replace existing value (this shouldn't happen here)
+
             entry = records[hash];
             if (entry.hash == key) {
                 entry.value.add_measurement(temperature);
@@ -550,7 +513,7 @@ public class CalculateUnsafeByteBuffer {
                 records[hash] = new MapEntry(key, new Station(name.getArray().array, key, temperature));
                 return;
             }
-            // replace existing value (this shouldn't happen here)
+
             entry = records[hash];
             if (entry.hash == key) {
                 entry.value.add_measurement(temperature);
@@ -558,25 +521,15 @@ public class CalculateUnsafeByteBuffer {
             throw new RuntimeException("Map Collision Error (merge)");
         }
 
-        // use the hash pre-calculated in the loop so we only need to access the name
-        // array the first time we see the station.
-//        void addCity(ByteArrayWindow name, int h, int temperature) {
-//            Station city = this.get(h);
-//            if (city != null) {
-//                city.add_measurement(temperature);
-//            } else {
-//                this.put(h, new Station(name.getArray().array, h, temperature));
-//            }
-//        }
 
-        void mergeCity(Station c1) {
+        void mergeCity(Station city) {
             // combine two sets of measurements for  city
-            int h = c1.hashCode;
-            Station c2 = this.get(h);
+            int h = city.hashCode;
+            Station c2 = get(h);
             if (c2 != null) {
-                c2.combine_results(c1);
+                c2.combine_results(city);
             } else {
-                this.put(h, c1);
+                put(h, city);
             }
         }
     }
@@ -656,10 +609,10 @@ class AppendableByteArray {
 
     int length;
     byte[] buffer;
-    static final int INITIAL_BUFF_SIZE = 40;
+    static final int INITIAL_BUFF_SIZE = 32;
 
     /*
-     40 bytes should be enough for anyone, right? The longest place name in the world
+     32 bytes should be enough for anyone, right? The longest place name in the world
      (Taumatawhakatangihangakoauauotamateaturipukakapikimaungahoronukupokaiwhenuakitanatahu)
      is 85 characters and I hope that doesn't appear in the test data.
      And that place in Wales (Llanfairpwllgwyngyllgogerychwyrndrobwllllantysiliogogogoch)
@@ -683,5 +636,4 @@ class AppendableByteArray {
     public String asString() {
         return new String(buffer, 0, length, StandardCharsets.UTF_8);
     }
-
 }
