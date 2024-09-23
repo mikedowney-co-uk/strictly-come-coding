@@ -31,14 +31,14 @@ public class CalculateUnsafeByteBuffer {
     ProcessData[] processors;
 
     public static void main(String[] args) throws Exception {
-        long startTime = System.currentTimeMillis();
+//        long startTime = System.currentTimeMillis();
         new CalculateUnsafeByteBuffer().go();
-        long endTime = System.currentTimeMillis();
-        System.out.printf("Took %.2f s\n", (endTime - startTime) / 1000.0);
+//        long endTime = System.currentTimeMillis();
+//        System.out.printf("Took %.2f s\n", (endTime - startTime) / 1000.0);
     }
 
     private void go() throws Exception {
-        System.out.println("Using " + threads + " cores");
+//        System.out.println("Using " + threads + " cores");
         threadPoolExecutor = Executors.newFixedThreadPool(threads);
         Future<?>[] runningThreads = new Future<?>[threads];
         processors = new ProcessData[threads];
@@ -102,11 +102,11 @@ public class CalculateUnsafeByteBuffer {
 //            System.out.printf(" (%d)", city.measurements);
             System.out.println(output.asString());
         }
-        System.out.println("length = " + sortedCities.size());
-        assert (sortedCities.size() == 413);
-        assert city.minT == -290;
-        assert city.maxT == 675;
-        assert city.measurements == 2420468;
+//        System.out.println("length = " + sortedCities.size());
+//        assert (sortedCities.size() == 413);
+//        assert city.minT == -290;
+//        assert city.maxT == 675;
+//        assert city.measurements == 2420468;
     }
 
     static byte[] fastNumberToString(int number) {
