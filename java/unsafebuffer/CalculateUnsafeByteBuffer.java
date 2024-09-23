@@ -73,10 +73,11 @@ public class CalculateUnsafeByteBuffer {
             } // end while
 
             waitForThreads(runningThreads, overallResults);
-            threadPoolExecutor.close();
 
             processFragments(overallResults);
             sortAndDisplay(overallResults);
+            threadPoolExecutor.shutdown();
+            threadPoolExecutor.close();
         } catch (NoSuchFieldException | IllegalAccessException e) {
             throw new RuntimeException(e);
         }
@@ -101,6 +102,7 @@ public class CalculateUnsafeByteBuffer {
             output.appendArray(String.format("%.1f;", city.total / (city.measurements * 10.0)).getBytes(StandardCharsets.UTF_8));
             output.appendArray(fastNumberToString(city.maxT));
             System.out.print(e.getKey());
+//            System.out.printf(" (%d)", city.measurements);
             System.out.println(output.asString());
         }
         System.out.println("length = " + sortedCities.size());
@@ -245,6 +247,7 @@ public class CalculateUnsafeByteBuffer {
 
 
         ListOfCities process() {
+
             ListOfCities results = new ListOfCities(blockNumber);
             // Read up to the first newline and add it as a fragment (potential end of previous block)
             ByteArrayWindow baw = new ByteArrayWindow(array, bufferPosition);
@@ -268,17 +271,16 @@ public class CalculateUnsafeByteBuffer {
                     readingName = false;
                     name.endIndex = bufferPosition - 1;
                     value.startIndex = bufferPosition;
-                } else if (b != '\n') {
-                    if (readingName) {
+                } else if (readingName) {
                         name.endIndex++;
                         h = 31 * h + b;
-                    } else {
+                } else if (b != '\n') {{
                         value.endIndex++;
                     }
                 } else {
                     value.endIndex = bufferPosition - 1;
                     int temperature = fastParseDouble(value);
-                    results.addCity(name, h, temperature);
+                    results.addOrMerge(h, name, temperature);
                     name.rewind(bufferPosition);
                     value.rewind(bufferPosition);
                     readingName = true;
@@ -422,7 +424,8 @@ public class CalculateUnsafeByteBuffer {
     }
 
 
-    static class ArrayMap {
+    // class which takes City entries and stores/updates them
+    static class ListOfCities {
         public record MapEntry(int hash, Station value) {}
         static final int HASH_SPACE = 8192;
         static final int COLLISION = 2;
@@ -464,38 +467,27 @@ public class CalculateUnsafeByteBuffer {
                     records[i] = new MapEntry(key, value);
                     return;
                 }
-                // replace existing value (this shouldn't happen here)
-//                MapEntry entry = records[i];
-//                if (entry.hash == key) {
-//                    records[i] = new MapEntry(key, value);
-//                    throw new RuntimeException("Map Replacement Error");
-//                }
             }
             throw new RuntimeException("Map Collision Error (put)");
         }
 
         public Iterable<Integer> keySet() {
             Set<Integer> s = new HashSet<>();
-            for (int i = 0; i < HASH_SPACE; i++) {
+            for (int i = 0; i < HASH_SPACE + COLLISION; i++) {
                 if (records[i] != null) {
                     s.add(records[i].hash);
                 }
             }
             return s;
         }
-    }
 
 
-    // class which takes City entries and stores/updates them
-//    static class ListOfCities extends HashMap<Integer, Station> {
-    static class ListOfCities extends ArrayMap {
         // startFragment is at the start of the block (or the end of the previous block)
         public byte[] startFragment;
         public byte[] endFragment;
         public int blockNumber;
 
         public ListOfCities(int blockNumber) {
-//            super(512);
             this.blockNumber = blockNumber;
         }
 
@@ -513,31 +505,72 @@ public class CalculateUnsafeByteBuffer {
             for (byte b : name) {
                 h = 31 * h + b;
             }
-            Station city = this.get(h);
-
-            if (city != null) {
-                city.add_measurement(temperature);
-            } else {
-                this.put(h, new Station(name, h, temperature));
+            int hash = h & (HASH_SPACE - 1);
+            // Search forwards checking for gaps or replacements
+            for (int i = hash; i < hash + COLLISION; i++) {
+                if (records[i] == null) {
+                    records[i] = new MapEntry(h, new Station(name, h, temperature));
+                    return;
+                }
+                // merge existing data
+                MapEntry entry = records[i];
+                if (entry.hash == h) {
+                    entry.value.add_measurement(temperature);
+                    return;
+                }
             }
+        }
+
+        void addOrMerge(int key, ByteArrayWindow name, int temperature) {
+            int hash = key & (HASH_SPACE - 1);
+            // Search forwards checking for gaps or replacements
+            if (records[hash] == null) {
+                records[hash] = new MapEntry(key, new Station(name.getArray().array, key, temperature));
+                return;
+            }
+            // replace existing value (this shouldn't happen here)
+            MapEntry entry = records[hash];
+            if (entry.hash == key) {
+                entry.value.add_measurement(temperature);
+                return;
+            }
+
+            if (records[++hash] == null) {
+                records[hash] = new MapEntry(key, new Station(name.getArray().array, key, temperature));
+                return;
+            }
+            // replace existing value (this shouldn't happen here)
+            entry = records[hash];
+            if (entry.hash == key) {
+                entry.value.add_measurement(temperature);
+                return;
+            }
+
+            if (records[++hash] == null) {
+                records[hash] = new MapEntry(key, new Station(name.getArray().array, key, temperature));
+                return;
+            }
+            // replace existing value (this shouldn't happen here)
+            entry = records[hash];
+            if (entry.hash == key) {
+                entry.value.add_measurement(temperature);
+            }
+            throw new RuntimeException("Map Collision Error (merge)");
         }
 
         // use the hash pre-calculated in the loop so we only need to access the name
         // array the first time we see the station.
-        void addCity(ByteArrayWindow name, int h, int temperature) {
-//            if (h == 1272579786){
-//                System.out.println("wait");
+//        void addCity(ByteArrayWindow name, int h, int temperature) {
+//            Station city = this.get(h);
+//            if (city != null) {
+//                city.add_measurement(temperature);
+//            } else {
+//                this.put(h, new Station(name.getArray().array, h, temperature));
 //            }
-            Station city = this.get(h);
-            if (city != null) {
-                city.add_measurement(temperature);
-            } else {
-                this.put(h, new Station(name.getArray().array, h, temperature));
-            }
-        }
+//        }
 
         void mergeCity(Station c1) {
-            // combine two sets of measurements for a city
+            // combine two sets of measurements for  city
             int h = c1.hashCode;
             Station c2 = this.get(h);
             if (c2 != null) {
