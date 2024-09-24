@@ -88,9 +88,8 @@ public class CalculateUnsafeByteBuffer {
                         c);
             }
         }
-        Station city = null;
         for (Map.Entry<String, Station> e : sortedCities.entrySet()) {
-            city = e.getValue();
+            Station city = e.getValue();
             AppendableByteArray output = new AppendableByteArray();
             output.addDelimiter();
             output.appendArray(fastNumberToString(city.minT));
@@ -149,7 +148,10 @@ public class CalculateUnsafeByteBuffer {
     private void waitForThreads(Future<?>[] runningThreads, ListOfCities overallResults) throws Exception {
         for (int i = 0; i < threads; i++) {
             if (runningThreads[i] != null) {
-                mergeAndStoreResults((ListOfCities) runningThreads[i].get(), overallResults);
+                ListOfCities resultToAdd = (ListOfCities) runningThreads[i].get();
+                if (resultToAdd != null) {
+                    mergeAndStoreResults(resultToAdd, overallResults);
+                }
             }
             processors[i].close();
         }
