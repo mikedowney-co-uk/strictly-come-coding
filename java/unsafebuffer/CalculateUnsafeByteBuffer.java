@@ -150,11 +150,11 @@ public class CalculateUnsafeByteBuffer {
             Station city = e.getValue();
             AppendableByteArray output = new AppendableByteArray();
             output.addDelimiter();
-            output.appendArray(fastNumberToString(city.minT));
+            output.appendArray(numberToString(city.minT));
             output.addDelimiter();
             // todo: sort out average calculation rounding errors using ints..
             output.appendArray(String.format("%.1f;", city.total / (city.measurements * 10.0)).getBytes(StandardCharsets.UTF_8));
-            output.appendArray(fastNumberToString(city.maxT));
+            output.appendArray(numberToString(city.maxT));
             System.out.print(e.getKey());
 //            System.out.printf(" (%d)", city.measurements);
             System.out.println(output.asString());
@@ -169,7 +169,7 @@ public class CalculateUnsafeByteBuffer {
 //        assert city.measurements == 2420468;
     }
 
-    static byte[] fastNumberToString(int number) {
+    static byte[] numberToString(int number) {
         int length;
         byte[] bytes;
         if (number < 0) { // -9 (-0.9), -99 (-9.9), -999 (-99.9)
@@ -284,7 +284,7 @@ public class CalculateUnsafeByteBuffer {
                     value.endIndex++;
                 } else {    // end of line
                     value.endIndex = bufferPosition - 1;
-                    results.addOrMerge(h, name, fastParseDouble(value));
+                    results.addOrMerge(h, name, parseCharsToDouble(value));
                     name.rewind(bufferPosition);
                     value.rewind(bufferPosition);
                     readingName = true;
@@ -307,34 +307,35 @@ public class CalculateUnsafeByteBuffer {
      * All the numbers are [-]d{1,2}.d so can take shortcuts with location of decimal place etc.
      * Returns 10* the actual number
      */
-    static int fastParseDouble(byte[] b, int length) {
+    static int parseCharsToDouble(byte[] b, int length) {
         if (b[0] == '-') {
             if (length == 4) {
-                return (b[1] - '0') * -10 - (b[3] - '0');
+//                return (b[1] - '0') * -10 - (b[3] - '0');
+                return -b[1] * 10 - b[3] + 528;
             } else {
-                return (b[1] - '0') * -100 - (b[2] - '0') * 10 - (b[4] - '0');
+                return -b[1] * 100 - b[2] * 10 - b[4] + 5328;
             }
         } else {
             if (length == 3) {
-                return (b[0] - '0') * 10 + (b[2] - '0');
+                return b[0] * 10 + b[2] - 528;
             } else {
-                return (b[0] - '0') * 100 + (b[1] - '0') * 10 + (b[3] - '0');
+                return b[0] * 100 + b[1] * 10 + b[3] - 5328;
             }
         }
     }
 
-    static int fastParseDouble(ByteArrayWindow baw) {
+    static int parseCharsToDouble(ByteArrayWindow baw) {
         if (baw.getByte(0) == '-') {
             if (baw.length() == 4) {
-                return (baw.getByte(1) - '0') * -10 - (baw.getByte(3) - '0');
+                return -baw.getByte(1) * 10 - baw.getByte(3) + 528;
             } else {
-                return (baw.getByte(1) - '0') * -100 - (baw.getByte(2) - '0') * 10 - (baw.getByte(4) - '0');
+                return -baw.getByte(1) * 100 - baw.getByte(2) * 10 - baw.getByte(4) + 5328;
             }
         } else {
             if (baw.length() == 3) {
-                return (baw.getByte(0) - '0') * 10 + (baw.getByte(2) - '0');
+                return baw.getByte(0) * 10 + baw.getByte(2) - 528;
             } else {
-                return (baw.getByte(0) - '0') * 100 + (baw.getByte(1) - '0') * 10 + (baw.getByte(3) - '0');
+                return baw.getByte(0) * 100 + baw.getByte(1) * 10 + baw.getByte(3) - 5328;
             }
         }
     }
@@ -344,15 +345,16 @@ public class CalculateUnsafeByteBuffer {
         byte[][] lineStarts = new byte[NUM_BLOCKS][];
 
         // spare characters at the end of a block will be the start of a row in the next block.
-        void addStart(Integer blockNumber, byte[] s) {
+        void addStart(int blockNumber, byte[] s) {
             lineStarts[blockNumber] = s;
         }
 
-        void addEnd(Integer blockNumber, byte[] s) {
+        void addEnd(int blockNumber, byte[] s) {
             lineEnds[blockNumber] = s;
         }
 
         String getJoinedFragments(int number) {
+            // turn the start and end fragments into a string
             byte[] start = lineStarts[number];
             byte[] end = lineEnds[number];
             if (start == null && end == null) {
@@ -432,7 +434,7 @@ public class CalculateUnsafeByteBuffer {
             String[] bits = line.split(";");
             byte[] number = bits[1].getBytes(StandardCharsets.UTF_8);
             byte[] name = bits[0].getBytes(StandardCharsets.UTF_8);
-            int temperature = fastParseDouble(number, number.length);
+            int temperature = parseCharsToDouble(number, number.length);
 
             // inlined hashcode for tiny speed increase
             int h = 0;
@@ -446,33 +448,33 @@ public class CalculateUnsafeByteBuffer {
         void addOrMerge(int key, ByteArrayWindow name, int temperature) {
             int hash = key & (HASH_SPACE - 1);
             // Search forwards checking for gaps or replacements
-            if (records[hash] == null) {
-                records[hash] = new MapEntry(key, new Station(name.getArray().array, key, temperature));
-                return;
-            }
             MapEntry entry = records[hash];
+            if (entry == null) {
+                records[hash] = new MapEntry(key, new Station(name.getArray().array, key, temperature));
+                return;
+            }
             if (entry.hash == key) {
                 entry.value.add_measurement(temperature);
                 return;
             }
 
-            if (records[++hash] == null) {
+            entry = records[++hash];
+            if (entry == null) {
                 records[hash] = new MapEntry(key, new Station(name.getArray().array, key, temperature));
                 return;
             }
 
-            entry = records[hash];
             if (entry.hash == key) {
                 entry.value.add_measurement(temperature);
                 return;
             }
 
-            if (records[++hash] == null) {
+            entry = records[++hash];
+            if (entry == null) {
                 records[hash] = new MapEntry(key, new Station(name.getArray().array, key, temperature));
                 return;
             }
 
-            entry = records[hash];
             if (entry.hash == key) {
                 entry.value.add_measurement(temperature);
             }
@@ -523,8 +525,6 @@ public class CalculateUnsafeByteBuffer {
 /**
  * Holds the start and end addresses of a substring within a byte array.
  * Has methods to retrieve copies of the substring where required.
- * (values are the addresses used in 'unsafe' so can only be used in
- * the memory access or copy functions there).
  */
 class ByteArrayWindow {
     final byte[] buffer;
