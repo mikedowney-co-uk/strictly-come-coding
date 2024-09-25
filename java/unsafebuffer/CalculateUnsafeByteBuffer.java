@@ -18,6 +18,8 @@ import java.util.concurrent.Future;
 /**
  * Reads the file into a set of ByteBuffers
  * Use byte arrays instead of Strings for the City names.
+ * <p>
+ * Add -ea to VM options to enable the asserts.
  */
 public class CalculateUnsafeByteBuffer {
 
@@ -30,15 +32,20 @@ public class CalculateUnsafeByteBuffer {
     static final int BUFFERSIZE = 1024 * 1024;
     ProcessData[] processors;
 
+    // text file is >13Gb
+    static final int NUM_BLOCKS = (int) (14_000_000_000L / BUFFERSIZE);
+
+
     public static void main(String[] args) throws Exception {
-//        long startTime = System.currentTimeMillis();
+        long startTime = System.currentTimeMillis();
         new CalculateUnsafeByteBuffer().go();
-//        long endTime = System.currentTimeMillis();
-//        System.out.printf("Took %.2f s\n", (endTime - startTime) / 1000.0);
+        long endTime = System.currentTimeMillis();
+        System.out.printf("Took %.2f s\n", (endTime - startTime) / 1000.0);
     }
 
     private void go() throws Exception {
 //        System.out.println("Using " + threads + " cores");
+//        System.out.println("Estimated number of blocks: " + NUM_BLOCKS);
         threadPoolExecutor = Executors.newFixedThreadPool(threads);
         Future<?>[] runningThreads = new Future<?>[threads];
         processors = new ProcessData[threads];
@@ -68,7 +75,7 @@ public class CalculateUnsafeByteBuffer {
                 }
             } // end for threads
         } // end while
-
+        System.out.println("blockNumber = " + blockNumber);
         ListOfCities overallResults = new ListOfCities(0);
         waitForThreads(runningThreads, overallResults);
 
@@ -76,6 +83,54 @@ public class CalculateUnsafeByteBuffer {
         sortAndDisplay(overallResults);
         threadPoolExecutor.shutdown();
         threadPoolExecutor.close();
+    }
+
+
+    private void processFragments(ListOfCities overallResults) {
+        for (int f = 0; f < NUM_BLOCKS; f++) {
+            String line = rf.getJoinedFragments(f);
+            if (!line.isEmpty()) {
+                overallResults.addCity(line);
+            }
+        }
+    }
+
+    private void waitForThreads(Future<?>[] runningThreads, ListOfCities overallResults) throws Exception {
+        for (int i = 0; i < threads; i++) {
+            if (runningThreads[i] != null) {
+                ListOfCities resultToAdd = (ListOfCities) runningThreads[i].get();
+                if (resultToAdd != null) {
+                    storeFragments(resultToAdd);
+                }
+            }
+            ProcessData p = processors[i];
+            mergeAndStoreResults(p.results, overallResults);
+
+            processors[i].close();
+        }
+    }
+
+    private void storeFragments(ListOfCities resultToAdd) {
+        if (resultToAdd.endFragment != null) {
+            rf.addStart(resultToAdd.blockNumber + 1, resultToAdd.endFragment);
+        }
+        if (resultToAdd.startFragment != null) {
+            rf.addEnd(resultToAdd.blockNumber, resultToAdd.startFragment);
+        }
+    }
+
+    private void mergeAndStoreResults(ListOfCities resultToAdd, ListOfCities overallResults) {
+        if (resultToAdd.endFragment != null) {
+            rf.addStart(resultToAdd.blockNumber + 1, resultToAdd.endFragment);
+        }
+        if (resultToAdd.startFragment != null) {
+            rf.addEnd(resultToAdd.blockNumber, resultToAdd.startFragment);
+        }
+        for (ListOfCities.MapEntry m : resultToAdd.records) {
+            if (m != null) {
+                overallResults.mergeCity(m.value);
+            }
+        }
     }
 
     private static void sortAndDisplay(ListOfCities overallResults) {
@@ -88,6 +143,9 @@ public class CalculateUnsafeByteBuffer {
                         c);
             }
         }
+
+//        Station city = new Station("Dummy".getBytes(), -1, 0);
+//        int count = 0;
         for (Map.Entry<String, Station> e : sortedCities.entrySet()) {
             Station city = e.getValue();
             AppendableByteArray output = new AppendableByteArray();
@@ -100,11 +158,14 @@ public class CalculateUnsafeByteBuffer {
             System.out.print(e.getKey());
 //            System.out.printf(" (%d)", city.measurements);
             System.out.println(output.asString());
+//            count += city.measurements;
         }
 //        System.out.println("length = " + sortedCities.size());
+//        System.out.println("count = " + count);
 //        assert (sortedCities.size() == 413);
 //        assert city.minT == -290;
 //        assert city.maxT == 675;
+//        assert count == 1_000_000_000;
 //        assert city.measurements == 2420468;
     }
 
@@ -136,49 +197,6 @@ public class CalculateUnsafeByteBuffer {
         return bytes;
     }
 
-    private void processFragments(ListOfCities overallResults) {
-        for (int f = 0; f < NUM_BLOCKS; f++) {
-            String line = rf.getJoinedFragments(f);
-            if (!line.isEmpty()) {
-                overallResults.addCity(line);
-            }
-        }
-    }
-
-    private void waitForThreads(Future<?>[] runningThreads, ListOfCities overallResults) throws Exception {
-        for (int i = 0; i < threads; i++) {
-            if (runningThreads[i] != null) {
-                ListOfCities resultToAdd = (ListOfCities) runningThreads[i].get();
-                if (resultToAdd != null) {
-                    mergeAndStoreResults(resultToAdd, overallResults);
-                }
-            }
-            processors[i].close();
-        }
-    }
-
-    private void storeFragments(ListOfCities resultToAdd) {
-        if (resultToAdd.endFragment != null) {
-            rf.addStart(resultToAdd.blockNumber + 1, resultToAdd.endFragment);
-        }
-        if (resultToAdd.startFragment != null) {
-            rf.addEnd(resultToAdd.blockNumber, resultToAdd.startFragment);
-        }
-    }
-
-    private void mergeAndStoreResults(ListOfCities resultToAdd, ListOfCities overallResults) {
-        if (resultToAdd.endFragment != null) {
-            rf.addStart(resultToAdd.blockNumber + 1, resultToAdd.endFragment);
-        }
-        if (resultToAdd.startFragment != null) {
-            rf.addEnd(resultToAdd.blockNumber, resultToAdd.startFragment);
-        }
-        for (ListOfCities.MapEntry m : resultToAdd.records) {
-            if (m != null) {
-                overallResults.mergeCity(m.value);
-            }
-        }
-    }
 
     static class ProcessData {
 
@@ -232,9 +250,9 @@ public class CalculateUnsafeByteBuffer {
             this.limit = innerBuffer.limit();
             this.array = innerBuffer.array();
             this.bufferPosition = unsafe.arrayBaseOffset(byte[].class);
-            this.results.blockNumber = blockNumber;
-            this.results.startFragment = null;
-            this.results.endFragment = null;
+            results.blockNumber = blockNumber;
+            results.startFragment = null;
+            results.endFragment = null;
 
             // Read up to the first newline and add it as a fragment (potential end of previous block)
             ByteArrayWindow baw = new ByteArrayWindow(array, bufferPosition);
@@ -262,7 +280,7 @@ public class CalculateUnsafeByteBuffer {
                 } else if (readingName) {
                     name.endIndex++;
                     h = 31 * h + b;
-                } else if (b != '\n') {
+                } else if (b != '\n') { // only consider chr=13 while reading numbers
                     value.endIndex++;
                 } else {    // end of line
                     value.endIndex = bufferPosition - 1;
@@ -320,9 +338,6 @@ public class CalculateUnsafeByteBuffer {
             }
         }
     }
-
-    // text file is >13Gb
-    static final int NUM_BLOCKS = (int) (14_000_000_000L / BUFFERSIZE);
 
     static class RowFragments {
         byte[][] lineEnds = new byte[NUM_BLOCKS][];
@@ -403,53 +418,6 @@ public class CalculateUnsafeByteBuffer {
         static final int COLLISION = 2;
         public MapEntry[] records = new MapEntry[HASH_SPACE + COLLISION];
 
-        public Station get(int key) {
-            int hash = key & (HASH_SPACE - 1);
-            // unrolled loop looking for the entry
-            MapEntry entry = records[hash];
-            if (entry != null && entry.hash == key) {
-                return entry.value;
-            }
-            if (entry == null) {
-                return null;
-            }
-
-            entry = records[++hash];
-            if (entry == null) {
-                return null;
-            }
-            if (entry.hash == key) {
-                return entry.value;
-            }
-
-            entry = records[++hash];
-            if (entry == null) {
-                return null;
-            }
-            if (entry.hash == key) {
-                return entry.value;
-            }
-            throw new RuntimeException("Map Collision Error (get)");
-        }
-
-        public void put(int key, Station value) {
-            int hash = key & (HASH_SPACE - 1);
-            // Search forwards checking for gaps. We never replace existing values.
-            if (records[hash] == null) {
-                records[hash] = new MapEntry(key, value);
-                return;
-            }
-            if (records[++hash] == null) {
-                records[hash] = new MapEntry(key, value);
-                return;
-            }
-            if (records[++hash] == null) {
-                records[hash] = new MapEntry(key, value);
-                return;
-            }
-            throw new RuntimeException("Map Collision Error (put)");
-        }
-
         // startFragment is at the start of the block (or the end of the previous block)
         public byte[] startFragment;
         public byte[] endFragment;
@@ -471,20 +439,8 @@ public class CalculateUnsafeByteBuffer {
             for (byte b : name) {
                 h = 31 * h + b;
             }
-            int hash = h & (HASH_SPACE - 1);
-            // Search forwards checking for gaps or replacements
-            for (int i = hash; i < hash + COLLISION; i++) {
-                if (records[i] == null) {
-                    records[i] = new MapEntry(h, new Station(name, h, temperature));
-                    return;
-                }
-                // merge existing data
-                MapEntry entry = records[i];
-                if (entry.hash == h) {
-                    entry.value.add_measurement(temperature);
-                    return;
-                }
-            }
+            Station city = new Station(name, h, temperature);
+            mergeCity(city);
         }
 
         void addOrMerge(int key, ByteArrayWindow name, int temperature) {
@@ -525,17 +481,44 @@ public class CalculateUnsafeByteBuffer {
 
 
         void mergeCity(Station city) {
-            // combine two sets of measurements for  city
+            // add a city, or if already present combine two sets of measurements
             int h = city.hashCode;
-            Station c2 = get(h);
-            if (c2 != null) {
-                c2.combine_results(city);
-            } else {
-                put(h, city);
+            int hash = h & (HASH_SPACE - 1);
+
+            MapEntry entry = records[hash];
+            if (entry == null) {
+                records[hash] = new MapEntry(h, city);
+                return;
             }
+            // Search forward looking for the city, merge if we find it,
+            // add it if we find a null
+            if (entry.hash == h) {
+                entry.value.combine_results(city);
+                return;
+            }
+            entry = records[++hash];
+            if (entry == null) {
+                records[hash] = new MapEntry(h, city);
+                return;
+            }
+            if (entry.hash == h) {
+                entry.value.combine_results(city);
+                return;
+            }
+            entry = records[++hash];
+            if (entry == null) {
+                records[hash] = new MapEntry(h, city);
+                return;
+            }
+            if (entry.hash == h) {
+                entry.value.combine_results(city);
+                return;
+            }
+            throw new RuntimeException("Map Collision Error (merge/put)");
         }
     }
 }
+
 
 /**
  * Holds the start and end addresses of a substring within a byte array.

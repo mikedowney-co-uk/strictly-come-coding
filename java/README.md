@@ -34,7 +34,20 @@ while(s.hasNext()){
     }
 ```
 - `ByteBuffer` was a lot quicker, taking 30s. For my timing test, it read the input a byte at a time, counting the newlines.
-- A multi-threaded `ByteBuffer` could read the file in as little as 10s.
+```
+    ByteBuffer buffer = ByteBuffer.allocate(BUFFERSIZE);
+    try (RandomAccessFile aFile = new RandomAccessFile(file, "r");
+         FileChannel channel = aFile.getChannel()) {
+         while (true) {
+             if (channel.read(buffer) == -1) {
+                break; // end of file
+             }
+             // do any processing here
+             buffer.flip();
+         } // end while
+    }
+```
+- A multi-threaded `ByteBuffer` could read the file and count the lines in as little as 5s.
 
 ## The Attempts
 ### 1. Sensible Java
@@ -60,7 +73,7 @@ This version takes 20 seconds to run.
 
 ### 3. A version of the above but using sun.misc.unsafe
 
-This is based on the `ByteBuffer` version but uses _unsafe_ to directly read arrays.
+This is based on the `ByteBuffer` version but uses _sun.misc.Unsafe_ to directly read the bytes.
 There are additional optimisations where methods are inlined or references to buffer
 slices are used instead of making copies of arrays.
 
