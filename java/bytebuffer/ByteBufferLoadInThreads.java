@@ -28,7 +28,7 @@ public class ByteBufferLoadInThreads {
     static final String file = "measurements.txt";
 
     final int threads = Runtime.getRuntime().availableProcessors();
-    RowFragments rf;
+    RowFragments fragmentStore;
     static final int BUFFERSIZE = 1024 * 1024;
     ProcessData[] processors;
 
@@ -49,7 +49,7 @@ public class ByteBufferLoadInThreads {
         threadPoolExecutor = Executors.newFixedThreadPool(threads);
         Future<?>[] runningThreads = new Future<?>[threads];
         processors = new ProcessData[threads];
-        rf = new RowFragments();
+        fragmentStore = new RowFragments();
 
         for (int i = 0; i < threads; i++) {
             processors[i] = new ProcessData(ByteBuffer.allocate(BUFFERSIZE), i);
@@ -64,8 +64,9 @@ public class ByteBufferLoadInThreads {
                     p.blockNumber = blockNumber++;
                     runningThreads[thread] = threadPoolExecutor.submit(p::process);
                 } else if (runningThreads[thread].isDone()) {
-                    // thread finished, collect result
+                    // thread finished, handle result.
                     ListOfCities resultToAdd = (ListOfCities) runningThreads[thread].get();
+                    // Note: we re-use the ListOfCities, 1 per processor, so only collect at the end
                     if (resultToAdd != null) {
                         storeFragments(resultToAdd);
                     } else {
@@ -88,13 +89,14 @@ public class ByteBufferLoadInThreads {
 
     private void processFragments(ListOfCities overallResults) {
         for (int f = 0; f < NUM_BLOCKS; f++) {
-            String line = rf.getJoinedFragments(f);
+            String line = fragmentStore.getJoinedFragments(f);
             if (!line.isEmpty()) {
                 overallResults.addCity(line);
             }
         }
     }
 
+    // wait for any final threads to finish and merge the results.
     private void waitForThreads(Future<?>[] runningThreads, ListOfCities overallResults) throws Exception {
         for (int i = 0; i < threads; i++) {
             if (runningThreads[i] != null) {
@@ -103,33 +105,24 @@ public class ByteBufferLoadInThreads {
                     storeFragments(resultToAdd);
                 }
             }
-            ProcessData p = processors[i];
-            mergeAndStoreResults(p.results, overallResults);
-
+            ListOfCities resultsToAdd = processors[i].results;
+            // Merges a result set into the final ListOfCities.
+            for (ListOfCities.MapEntry m : resultsToAdd.records) {
+                if (m != null) {
+                    overallResults.mergeCity(m.value);
+                }
+            }
             processors[i].close();
         }
     }
 
+    // Adds the end fragments to the fragment store.
     private void storeFragments(ListOfCities resultToAdd) {
         if (resultToAdd.endFragment != null) {
-            rf.addStart(resultToAdd.blockNumber + 1, resultToAdd.endFragment);
+            fragmentStore.addStart(resultToAdd.blockNumber + 1, resultToAdd.endFragment);
         }
         if (resultToAdd.startFragment != null) {
-            rf.addEnd(resultToAdd.blockNumber, resultToAdd.startFragment);
-        }
-    }
-
-    private void mergeAndStoreResults(ListOfCities resultToAdd, ListOfCities overallResults) {
-        if (resultToAdd.endFragment != null) {
-            rf.addStart(resultToAdd.blockNumber + 1, resultToAdd.endFragment);
-        }
-        if (resultToAdd.startFragment != null) {
-            rf.addEnd(resultToAdd.blockNumber, resultToAdd.startFragment);
-        }
-        for (ListOfCities.MapEntry m : resultToAdd.records) {
-            if (m != null) {
-                overallResults.mergeCity(m.value);
-            }
+            fragmentStore.addEnd(resultToAdd.blockNumber, resultToAdd.startFragment);
         }
     }
 
@@ -354,7 +347,8 @@ public class ByteBufferLoadInThreads {
     }
 
 
-    // class which takes City entries and stores/updates them
+    // class which holds weather stations and updates them
+    // Array based 'map'.
     static class ListOfCities {
         public record MapEntry(int hash, Station value) {
         }
@@ -404,6 +398,7 @@ public class ByteBufferLoadInThreads {
             mergeCity(city);
         }
 
+        // Called during the main processing loop
         void addOrMerge(int key, ByteArrayWindow name, int temperature) {
             int hash = key & (HASH_SPACE - 1);
             // Search forwards search for the entry or a gap
@@ -437,10 +432,11 @@ public class ByteBufferLoadInThreads {
             if (entry.hash == key) {
                 entry.value.add_measurement(temperature);
             }
+            // don't fail silently, fail kicking and screaming if we can't store the value.
             throw new RuntimeException("Map Collision Error (merge)");
         }
 
-
+        // Called during the final data merging and during the fragment processing
         void mergeCity(Station city) {
             // add a city, or if already present combine two sets of measurements
             int h = city.hashCode;
