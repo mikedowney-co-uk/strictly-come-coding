@@ -54,11 +54,11 @@ public class CalculateUnsafeByteBuffer {
         for (int i = 0; i < threads; i++) {
             processors[i] = new ProcessData(ByteBuffer.allocate(BUFFERSIZE), i);
         }
-        boolean doWeStillHaveData = true;
+        boolean weStillHaveData = true;
         int blockNumber = 0;
 
-        while (doWeStillHaveData) {
-            for (int thread = 0; thread < threads && doWeStillHaveData; thread++) {
+        while (weStillHaveData) {
+            for (int thread = 0; thread < threads && weStillHaveData; thread++) {
                 if (runningThreads[thread] == null) {
                     ProcessData p = processors[thread];
                     p.blockNumber = blockNumber++;
@@ -69,13 +69,13 @@ public class CalculateUnsafeByteBuffer {
                     if (resultToAdd != null) {
                         storeFragments(resultToAdd);
                     } else {
-                        doWeStillHaveData = false;
+                        weStillHaveData = false;
                     }
                     runningThreads[thread] = null;
                 }
             } // end for threads
         } // end while
-        System.out.println("blockNumber = " + blockNumber);
+//        System.out.println("blockNumber = " + blockNumber);
         ListOfCities overallResults = new ListOfCities(0);
         waitForThreads(runningThreads, overallResults);
 
@@ -172,7 +172,7 @@ public class CalculateUnsafeByteBuffer {
     static byte[] numberToString(int number) {
         int length;
         byte[] bytes;
-        if (number < 0) { // -9 (-0.9), -99 (-9.9), -999 (-99.9)
+        if (number < 0) { // eg. -9 (-0.9), -99 (-9.9), -999 (-99.9)
             number = -number;  // negative
             if (number >= 100) {
                 length = 5;
@@ -284,7 +284,7 @@ public class CalculateUnsafeByteBuffer {
                     value.endIndex++;
                 } else {    // end of line
                     value.endIndex = bufferPosition - 1;
-                    results.addOrMerge(h, name, parseCharsToDouble(value));
+                    results.addOrMerge(h, name, value.parseCharsToDouble());
                     name.rewind(bufferPosition);
                     value.rewind(bufferPosition);
                     readingName = true;
@@ -324,21 +324,6 @@ public class CalculateUnsafeByteBuffer {
         }
     }
 
-    static int parseCharsToDouble(ByteArrayWindow baw) {
-        if (baw.getByte(0) == '-') {
-            if (baw.length() == 4) {
-                return -baw.getByte(1) * 10 - baw.getByte(3) + 528;
-            } else {
-                return -baw.getByte(1) * 100 - baw.getByte(2) * 10 - baw.getByte(4) + 5328;
-            }
-        } else {
-            if (baw.length() == 3) {
-                return baw.getByte(0) * 10 + baw.getByte(2) - 528;
-            } else {
-                return baw.getByte(0) * 100 + baw.getByte(1) * 10 + baw.getByte(3) - 5328;
-            }
-        }
-    }
 
     static class RowFragments {
         byte[][] lineEnds = new byte[NUM_BLOCKS][];
@@ -394,7 +379,8 @@ public class CalculateUnsafeByteBuffer {
             measurements++;
             if (temp > maxT) {
                 maxT = temp;
-            } else if (temp < minT) {
+            }
+            if (temp < minT) {
                 minT = temp;
             }
         }
@@ -404,7 +390,8 @@ public class CalculateUnsafeByteBuffer {
             total += city.total;
             if (city.maxT > maxT) {
                 maxT = city.maxT;
-            } else if (city.minT < minT) {
+            }
+            if (city.minT < minT) {
                 minT = city.minT;
             }
         }
@@ -447,7 +434,7 @@ public class CalculateUnsafeByteBuffer {
 
         void addOrMerge(int key, ByteArrayWindow name, int temperature) {
             int hash = key & (HASH_SPACE - 1);
-            // Search forwards checking for gaps or replacements
+            // Search forwards search for the entry or a gap
             MapEntry entry = records[hash];
             if (entry == null) {
                 records[hash] = new MapEntry(key, new Station(name.getArray().array, key, temperature));
@@ -492,8 +479,7 @@ public class CalculateUnsafeByteBuffer {
                 records[hash] = new MapEntry(h, city);
                 return;
             }
-            // Search forward looking for the city, merge if we find it,
-            // add it if we find a null
+            // Search forward looking for the city, merge if we find it, add it if we find a null
             if (entry.hash == h) {
                 entry.value.combine_results(city);
                 return;
@@ -550,6 +536,22 @@ class ByteArrayWindow {
         this.buffer = buffer;
         this.startIndex = startIndex;
         this.endIndex = startIndex;
+    }
+
+    int parseCharsToDouble() {
+        if (unsafe.getByte(buffer, startIndex) == '-') {
+            if (length() == 4) {
+                return -getByte(1) * 10 - getByte(3) + 528;
+            } else {
+                return -getByte(1) * 100 - getByte(2) * 10 - getByte(4) + 5328;
+            }
+        } else {
+            if (length() == 3) {
+                return getByte(0) * 10 + getByte(2) - 528;
+            } else {
+                return getByte(0) * 100 + getByte(1) * 10 + getByte(3) - 5328;
+            }
+        }
     }
 
     public byte getByte(int offset) {
