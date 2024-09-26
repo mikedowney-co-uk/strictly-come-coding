@@ -1,14 +1,12 @@
-package unsafebuffer;
-
-import sun.misc.Unsafe;
+package bytebuffer;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.RandomAccessFile;
-import java.lang.reflect.Field;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.concurrent.ExecutorService;
@@ -18,10 +16,12 @@ import java.util.concurrent.Future;
 /**
  * Reads the file into a set of ByteBuffers
  * Use byte arrays instead of Strings for the City names.
+ * Based on the version using Unsafe (which had all the optimisations in the data structures)
+ * but is back to using array reads instead.
  * <p>
  * Add -ea to VM options to enable the asserts.
  */
-public class CalculateUnsafeByteBuffer {
+public class ByteBufferLoadInThreads {
 
     ExecutorService threadPoolExecutor;
 
@@ -38,7 +38,7 @@ public class CalculateUnsafeByteBuffer {
 
     public static void main(String[] args) throws Exception {
         long startTime = System.currentTimeMillis();
-        new CalculateUnsafeByteBuffer().go();
+        new ByteBufferLoadInThreads().go();
         long endTime = System.currentTimeMillis();
         System.out.printf("Took %.2f s\n", (endTime - startTime) / 1000.0);
     }
@@ -144,10 +144,10 @@ public class CalculateUnsafeByteBuffer {
             }
         }
 
-//        Station city = new Station("Dummy".getBytes(), -1, 0);
+        Station city; // = new Station("Dummy".getBytes(), -1, 0);
 //        int count = 0;
         for (Map.Entry<String, Station> e : sortedCities.entrySet()) {
-            Station city = e.getValue();
+            city = e.getValue();
             AppendableByteArray output = new AppendableByteArray();
             output.addDelimiter();
             output.appendArray(numberToString(city.minT));
@@ -163,10 +163,7 @@ public class CalculateUnsafeByteBuffer {
 //        System.out.println("length = " + sortedCities.size());
 //        System.out.println("count = " + count);
 //        assert (sortedCities.size() == 413);
-//        assert city.minT == -290;
-//        assert city.maxT == 675;
 //        assert count == 1_000_000_000;
-//        assert city.measurements == 2420468;
     }
 
     static byte[] numberToString(int number) {
@@ -205,30 +202,15 @@ public class CalculateUnsafeByteBuffer {
         FileChannel channel;
 
         int blockNumber;
-        int bufferPosition;
         int limit;
         byte[] array;
 
-        static Unsafe unsafe;
-        static final int arrayOffset;
         ListOfCities results = new ListOfCities(blockNumber);
-
-        static {
-            try {
-                Field unsafeField = Unsafe.class.getDeclaredField("theUnsafe");
-                unsafeField.setAccessible(true);
-                unsafe = (Unsafe) unsafeField.get(null);
-                arrayOffset = unsafe.arrayBaseOffset(byte[].class);
-            } catch (NoSuchFieldException | IllegalAccessException e) {
-                throw new RuntimeException(e);
-            }
-        }
 
         public ProcessData(ByteBuffer buffer, int blockNumber) throws FileNotFoundException {
             this.innerBuffer = buffer;
             this.limit = buffer.limit();
             this.array = buffer.array();
-            this.bufferPosition = unsafe.arrayBaseOffset(byte[].class);
             this.blockNumber = blockNumber;
             this.raFile = new RandomAccessFile(file, "r");
             this.channel = raFile.getChannel();
@@ -249,44 +231,40 @@ public class CalculateUnsafeByteBuffer {
 
             this.limit = innerBuffer.limit();
             this.array = innerBuffer.array();
-            this.bufferPosition = unsafe.arrayBaseOffset(byte[].class);
             results.blockNumber = blockNumber;
             results.startFragment = null;
             results.endFragment = null;
 
             // Read up to the first newline and add it as a fragment (potential end of previous block)
+            int bufferPosition = 0;
             ByteArrayWindow baw = new ByteArrayWindow(array, bufferPosition);
-            byte b = unsafe.getByte(array, bufferPosition++);
-            int start = 0;
+            byte b = array[bufferPosition++];
             while (b != '\n') {
                 baw.endIndex++;
-                b = unsafe.getByte(array, bufferPosition++);
-                start++;
+                b = array[bufferPosition++];
             }
-            results.startFragment = baw.getArray().array;
+            results.startFragment = baw.getArray();
 
             // Main loop through block
             ByteArrayWindow name = new ByteArrayWindow(array, bufferPosition);
             ByteArrayWindow value = new ByteArrayWindow(array, bufferPosition);
             boolean readingName = true;
             int h = 0;
-            for (int i = start; i < limit; i++) {
-                b = unsafe.getByte(array, bufferPosition++);
+            for (; bufferPosition < limit; bufferPosition++) {
+                b = array[bufferPosition];
                 // read until we get to the delimiter and the newline
                 if (b == ';') {
                     readingName = false;
-                    name.endIndex = bufferPosition - 1;
-                    value.startIndex = bufferPosition;
+                    name.endIndex = bufferPosition;
+                    value.rewind(bufferPosition + 1);
                 } else if (readingName) {
                     name.endIndex++;
                     h = 31 * h + b;
-                } else if (b != '\n') { // only consider chr=13 while reading numbers
+                } else if (b != '\n') { // only consider chr=13 as newline while reading numbers
                     value.endIndex++;
                 } else {    // end of line
-                    value.endIndex = bufferPosition - 1;
-                    results.addOrMerge(h, name, value.parseCharsToDouble());
-                    name.rewind(bufferPosition);
-                    value.rewind(bufferPosition);
+                    results.addOrMerge(h, name, value.charsToDouble());
+                    name.rewind(bufferPosition + 1);
                     readingName = true;
                     h = 0;
                 }
@@ -294,33 +272,11 @@ public class CalculateUnsafeByteBuffer {
             // If we get to the end and there is still data left, add it to the fragments as the start of the next block
             if (name.length() > 0) {
                 ByteArrayWindow fragment = new ByteArrayWindow(array, name.startIndex);
-                fragment.endIndex = bufferPosition - 1;
-                results.endFragment = fragment.getArray().array;
+                fragment.endIndex = bufferPosition;
+                results.endFragment = fragment.getArray();
             }
             innerBuffer.clear();
             return results;
-        }
-    }
-
-    /**
-     * Parse a byte array into a number without having to go through a String first
-     * All the numbers are [-]d{1,2}.d so can take shortcuts with location of decimal place etc.
-     * Returns 10* the actual number
-     */
-    static int parseCharsToDouble(byte[] b, int length) {
-        if (b[0] == '-') {
-            if (length == 4) {
-//                return (b[1] - '0') * -10 - (b[3] - '0');
-                return -b[1] * 10 - b[3] + 528;
-            } else {
-                return -b[1] * 100 - b[2] * 10 - b[4] + 5328;
-            }
-        } else {
-            if (length == 3) {
-                return b[0] * 10 + b[2] - 528;
-            } else {
-                return b[0] * 100 + b[1] * 10 + b[3] - 5328;
-            }
         }
     }
 
@@ -416,19 +372,35 @@ public class CalculateUnsafeByteBuffer {
             this.blockNumber = blockNumber;
         }
 
-        // Only called at the end on the line fragments - doesn't need to be as optimised
+        // Only called at the end on the line fragments.
         void addCity(String line) {
-            String[] bits = line.split(";");
-            byte[] number = bits[1].getBytes(StandardCharsets.UTF_8);
-            byte[] name = bits[0].getBytes(StandardCharsets.UTF_8);
-            int temperature = parseCharsToDouble(number, number.length);
+            byte[] array = line.getBytes(StandardCharsets.UTF_8);
+            ByteArrayWindow name = new ByteArrayWindow(array, 0);
+            ByteArrayWindow temp = null;
+            boolean readingName = true;
+            for (int i=0; i<array.length; i++) {
+                byte b = array[i];
+                if (b == ';') {
+                    readingName = false;
+                    name.endIndex = i;
+                    temp = new ByteArrayWindow(array, i + 1);
+                    temp.endIndex = array.length;
+                } else if (readingName) {
+                    name.endIndex++;
+                } else {
+                    break;
+                }
+            }
+
+            int temperature = temp.charsToDouble();
 
             // inlined hashcode for tiny speed increase
             int h = 0;
-            for (byte b : name) {
+            byte[] nameArray = name.getArray();
+            for (byte b : nameArray) {
                 h = 31 * h + b;
             }
-            Station city = new Station(name, h, temperature);
+            Station city = new Station(nameArray, h, temperature);
             mergeCity(city);
         }
 
@@ -437,7 +409,7 @@ public class CalculateUnsafeByteBuffer {
             // Search forwards search for the entry or a gap
             MapEntry entry = records[hash];
             if (entry == null) {
-                records[hash] = new MapEntry(key, new Station(name.getArray().array, key, temperature));
+                records[hash] = new MapEntry(key, new Station(name.getArray(), key, temperature));
                 return;
             }
             if (entry.hash == key) {
@@ -447,7 +419,7 @@ public class CalculateUnsafeByteBuffer {
 
             entry = records[++hash];
             if (entry == null) {
-                records[hash] = new MapEntry(key, new Station(name.getArray().array, key, temperature));
+                records[hash] = new MapEntry(key, new Station(name.getArray(), key, temperature));
                 return;
             }
 
@@ -458,7 +430,7 @@ public class CalculateUnsafeByteBuffer {
 
             entry = records[++hash];
             if (entry == null) {
-                records[hash] = new MapEntry(key, new Station(name.getArray().array, key, temperature));
+                records[hash] = new MapEntry(key, new Station(name.getArray(), key, temperature));
                 return;
             }
 
@@ -516,21 +488,6 @@ class ByteArrayWindow {
     final byte[] buffer;
     int startIndex;
     int endIndex;
-    byte[] array; // only populated at the very end
-
-    static final Unsafe unsafe;
-    static final int bufferStart;
-
-    static {
-        try {
-            Field unsafeField = Unsafe.class.getDeclaredField("theUnsafe");
-            unsafeField.setAccessible(true);
-            unsafe = (Unsafe) unsafeField.get(null);
-            bufferStart = unsafe.arrayBaseOffset(byte[].class);
-        } catch (NoSuchFieldException | IllegalAccessException e) {
-            throw new RuntimeException(e);
-        }
-    }
 
     public ByteArrayWindow(byte[] buffer, int startIndex) {
         this.buffer = buffer;
@@ -538,31 +495,29 @@ class ByteArrayWindow {
         this.endIndex = startIndex;
     }
 
-    int parseCharsToDouble() {
-        if (unsafe.getByte(buffer, startIndex) == '-') {
+    /**
+     * Parse a byte array into a number without having to go through a String first
+     * All the numbers are [-]d{1,2}.d so can take shortcuts with location of decimal place etc.
+     * Returns 10* the actual number
+     */
+    int charsToDouble() {
+        if (buffer[startIndex] == '-') {
             if (length() == 4) {
-                return -getByte(1) * 10 - getByte(3) + 528;
+                return -buffer[startIndex + 1] * 10 - buffer[startIndex + 3] + 528;
             } else {
-                return -getByte(1) * 100 - getByte(2) * 10 - getByte(4) + 5328;
+                return -buffer[startIndex + 1] * 100 - buffer[startIndex + 2] * 10 - buffer[startIndex + 4] + 5328;
             }
         } else {
             if (length() == 3) {
-                return getByte(0) * 10 + getByte(2) - 528;
+                return buffer[startIndex] * 10 + buffer[startIndex + 2] - 528;
             } else {
-                return getByte(0) * 100 + getByte(1) * 10 + getByte(3) - 5328;
+                return buffer[startIndex] * 100 + buffer[startIndex + 1] * 10 + buffer[startIndex + 3] - 5328;
             }
         }
     }
 
-
-    public byte getByte(int offset) {
-        return unsafe.getByte(buffer, startIndex + offset);
-    }
-
-    ByteArrayWindow getArray() {
-        array = new byte[endIndex - startIndex];
-        unsafe.copyMemory(buffer, startIndex, array, bufferStart, endIndex - startIndex);
-        return this;
+    byte[] getArray() {
+        return Arrays.copyOfRange(buffer, startIndex, endIndex);
     }
 
     public void rewind(int bufferPosition) {
@@ -575,29 +530,14 @@ class ByteArrayWindow {
     }
 }
 
+
 /**
  * Holds a byte array along with methods to add bytes and concatenate arrays.
- * Not using it in the main loop any more but still currently using it to build up
- * the output.
  */
 class AppendableByteArray {
-    static final Unsafe unsafe;
-    static final int bufferStart;
-
-    static {
-        try {
-            Field unsafeField = Unsafe.class.getDeclaredField("theUnsafe");
-            unsafeField.setAccessible(true);
-            unsafe = (Unsafe) unsafeField.get(null);
-            bufferStart = unsafe.arrayBaseOffset(byte[].class);
-        } catch (NoSuchFieldException | IllegalAccessException e) {
-            throw new RuntimeException(e);
-        }
-    }
-
     int length;
     byte[] buffer;
-    static final int INITIAL_BUFF_SIZE = 32;
+    static int INITIAL_BUFF_SIZE = 32;
 
     /*
      32 bytes should be enough for anyone, right? The longest place name in the world
@@ -611,17 +551,33 @@ class AppendableByteArray {
         buffer = new byte[INITIAL_BUFF_SIZE];
     }
 
-    void addDelimiter() {
-        unsafe.putByte(buffer, bufferStart + length, (byte) ';');
-        length++;
+    byte[] getBuffer() {
+        return Arrays.copyOfRange(buffer, 0, length);
     }
 
-    void appendArray(byte[] bytes) {
-        unsafe.copyMemory(bytes, bufferStart, buffer, bufferStart + length, bytes.length);
-        length += bytes.length;
+    void addByte(byte b) {
+        buffer[length++] = b;
+    }
+
+    void appendArray(AppendableByteArray toAppend) {
+        System.arraycopy(toAppend.buffer, 0, buffer, length, toAppend.length);
+        length += toAppend.length;
+    }
+
+    void rewind() {
+        length = 0;
     }
 
     public String asString() {
         return new String(buffer, 0, length, StandardCharsets.UTF_8);
+    }
+
+    public void addDelimiter() {
+        buffer[length++] = ';';
+    }
+
+    public void appendArray(byte[] bytes) {
+        System.arraycopy(bytes, 0, buffer, length, bytes.length);
+        length += bytes.length;
     }
 }
