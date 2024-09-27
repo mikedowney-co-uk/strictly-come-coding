@@ -9,9 +9,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.TreeMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
+import java.util.concurrent.*;
 
 /**
  * Reads the file into a set of ByteBuffers
@@ -27,7 +25,7 @@ public class ByteBufferLoadInThreads {
 
     static final String file = "measurements.txt";
 
-    final int threads = Runtime.getRuntime().availableProcessors();
+    final int threads = Runtime.getRuntime().availableProcessors() - 1;
     RowFragments fragmentStore;
     static final int BUFFERSIZE = 1024 * 1024;
     ProcessData[] processors;
@@ -68,7 +66,7 @@ public class ByteBufferLoadInThreads {
                     ListOfCities resultToAdd = (ListOfCities) runningThreads[thread].get();
                     // Note: we re-use the ListOfCities, 1 per processor, so only collect at the end
                     if (resultToAdd != null) {
-                        storeFragments(resultToAdd);
+                        fragmentStore.storeFragments(resultToAdd);
                     } else {
                         weStillHaveData = false;
                     }
@@ -89,8 +87,8 @@ public class ByteBufferLoadInThreads {
 
     private void processFragments(ListOfCities overallResults) {
         for (int f = 0; f < NUM_BLOCKS; f++) {
-            String line = fragmentStore.getJoinedFragments(f);
-            if (!line.isEmpty()) {
+            byte[] line = fragmentStore.getJoinedFragments(f);
+            if (line != null) {
                 overallResults.addCity(line);
             }
         }
@@ -102,7 +100,7 @@ public class ByteBufferLoadInThreads {
             if (runningThreads[i] != null) {
                 ListOfCities resultToAdd = (ListOfCities) runningThreads[i].get();
                 if (resultToAdd != null) {
-                    storeFragments(resultToAdd);
+                    fragmentStore.storeFragments(resultToAdd);
                 }
             }
             ListOfCities resultsToAdd = processors[i].results;
@@ -113,16 +111,6 @@ public class ByteBufferLoadInThreads {
                 }
             }
             processors[i].close();
-        }
-    }
-
-    // Adds the end fragments to the fragment store.
-    private void storeFragments(ListOfCities resultToAdd) {
-        if (resultToAdd.endFragment != null) {
-            fragmentStore.addStart(resultToAdd.blockNumber + 1, resultToAdd.endFragment);
-        }
-        if (resultToAdd.startFragment != null) {
-            fragmentStore.addEnd(resultToAdd.blockNumber, resultToAdd.startFragment);
         }
     }
 
@@ -145,8 +133,12 @@ public class ByteBufferLoadInThreads {
             output.addDelimiter();
             output.appendArray(numberToString(city.minT));
             output.addDelimiter();
-            // todo: sort out average calculation rounding errors using ints..
             output.appendArray(String.format("%.1f;", city.total / (city.measurements * 10.0)).getBytes(StandardCharsets.UTF_8));
+//            System.out.printf("%s;%s;%.1f;%s\n",
+//                    e.getKey(), new String(numberToString(city.minT), StandardCharsets.UTF_8),
+//                    city.total / (city.measurements * 10.0),
+//                    new String(numberToString(city.maxT), StandardCharsets.UTF_8));
+
             output.appendArray(numberToString(city.maxT));
             System.out.print(e.getKey());
 //            System.out.printf(" (%d)", city.measurements);
@@ -159,6 +151,7 @@ public class ByteBufferLoadInThreads {
 //        assert count == 1_000_000_000;
     }
 
+    // Only used in the final display
     static byte[] numberToString(int number) {
         int length;
         byte[] bytes;
@@ -202,7 +195,6 @@ public class ByteBufferLoadInThreads {
 
         public ProcessData(ByteBuffer buffer, int blockNumber) throws FileNotFoundException {
             this.innerBuffer = buffer;
-            this.limit = buffer.limit();
             this.array = buffer.array();
             this.blockNumber = blockNumber;
             this.raFile = new RandomAccessFile(file, "r");
@@ -223,23 +215,19 @@ public class ByteBufferLoadInThreads {
             innerBuffer.flip();
 
             this.limit = innerBuffer.limit();
-            this.array = innerBuffer.array();
+            // block number for the fragment collection
             results.blockNumber = blockNumber;
-            results.startFragment = null;
             results.endFragment = null;
 
             // Read up to the first newline and add it as a fragment (potential end of previous block)
             int bufferPosition = 0;
-            ByteArrayWindow baw = new ByteArrayWindow(array, bufferPosition);
             byte b = array[bufferPosition++];
             while (b != '\n') {
-                baw.endIndex++;
                 b = array[bufferPosition++];
             }
-            results.startFragment = baw.getArray();
+            results.startFragment = Arrays.copyOfRange(array, 0, bufferPosition - 1);
 
             // Main loop through block
-            // inline the ByteArrayWindow
             int nameStart = bufferPosition;
             int nameEnd = bufferPosition;
             boolean readingName = true;
@@ -253,10 +241,9 @@ public class ByteBufferLoadInThreads {
                 // read until we get to the delimiter and the newline
                 if (b == ';') {
                     readingName = false;
-//                    name.endIndex = bufferPosition;
                     nameEnd = bufferPosition;
                 } else if (readingName) {
-                    h = 31 * h + b;
+                    h = 31 * h + b; // calculate the hash of the name
                 } else if (b != '\n') { // only consider chr=13 as newline while reading numbers
                     if (b == '-') {
                         sign = -1;
@@ -275,9 +262,7 @@ public class ByteBufferLoadInThreads {
             } // end for
             // If we get to the end and there is still data left, add it to the fragments as the start of the next block
             if (nameStart < limit) {
-                ByteArrayWindow fragment = new ByteArrayWindow(array, nameStart);
-                fragment.endIndex = bufferPosition;
-                results.endFragment = fragment.getArray();
+                results.endFragment = Arrays.copyOfRange(array, nameStart, limit);
             }
             innerBuffer.clear();
             return results;
@@ -289,30 +274,31 @@ public class ByteBufferLoadInThreads {
         byte[][] lineEnds = new byte[NUM_BLOCKS][];
         byte[][] lineStarts = new byte[NUM_BLOCKS][];
 
-        // spare characters at the end of a block will be the start of a row in the next block.
-        void addStart(int blockNumber, byte[] s) {
-            lineStarts[blockNumber] = s;
-        }
-
-        void addEnd(int blockNumber, byte[] s) {
-            lineEnds[blockNumber] = s;
-        }
-
-        String getJoinedFragments(int number) {
-            // turn the start and end fragments into a string
+        byte[] getJoinedFragments(int number) {
+            // join the start and end fragments together
             byte[] start = lineStarts[number];
             byte[] end = lineEnds[number];
             if (start == null && end == null) {
-                return "";
+                return null;
             } else if (start == null) {
-                return new String(end, StandardCharsets.UTF_8);
+                return end;
             } else if (end == null) {
-                return new String(start, StandardCharsets.UTF_8);
+                return start;
             } else {
-                AppendableByteArray combined = new AppendableByteArray();
-                combined.appendArray(start);
-                combined.appendArray(end);
-                return combined.asString();
+                byte[] bufferToBuild = new byte[start.length + end.length];
+                System.arraycopy(start, 0, bufferToBuild, 0, start.length);
+                System.arraycopy(end, 0, bufferToBuild, start.length, end.length);
+                return bufferToBuild;
+            }
+        }
+
+        // spare characters at the end of a block will be the start of a row in the next block.
+        public void storeFragments(ListOfCities resultToAdd) {
+            if (resultToAdd.endFragment != null) {
+                lineStarts[resultToAdd.blockNumber + 1] = resultToAdd.endFragment;
+            }
+            if (resultToAdd.startFragment != null) {
+                lineEnds[resultToAdd.blockNumber] = resultToAdd.startFragment;
             }
         }
     }
@@ -365,7 +351,9 @@ public class ByteBufferLoadInThreads {
         public record MapEntry(int hash, Station value) {
         }
 
+        // larger values have fewer collisions but the increased array size takes longer to traverse
         static final int HASH_SPACE = 8192;
+        // decreasing the hash array size means this needs increasing to at least 4
         static final int COLLISION = 2;
         public MapEntry[] records = new MapEntry[HASH_SPACE + COLLISION];
 
@@ -379,11 +367,12 @@ public class ByteBufferLoadInThreads {
         }
 
         // Only called at the end on the line fragments.
-        void addCity(String line) {
-            byte[] array = line.getBytes(StandardCharsets.UTF_8);
+        void addCity(byte[] array) {
             ByteArrayWindow name = new ByteArrayWindow(array, 0);
             ByteArrayWindow temp = null;
             boolean readingName = true;
+            // Split the line into name and temperature
+            int hashCode = 0;
             for (int i=0; i<array.length; i++) {
                 byte b = array[i];
                 if (b == ';') {
@@ -393,21 +382,16 @@ public class ByteBufferLoadInThreads {
                     temp.endIndex = array.length;
                 } else if (readingName) {
                     name.endIndex++;
+                    hashCode = 31 * hashCode + b;
                 } else {
                     break;
                 }
             }
 
-            int temperature = temp.charsToDouble();
-
-            // inlined hashcode for tiny speed increase
-            int h = 0;
-            byte[] nameArray = name.getArray();
-            for (byte b : nameArray) {
-                h = 31 * h + b;
-            }
-            Station city = new Station(nameArray, h, temperature);
-            mergeCity(city);
+//            Station city = new Station(name.getArray(), hashCode, temp.charsToDouble());
+            // big gamble - we will already have seen all the station codes during the block.
+            // use a shortcut merge which only considers hashCode and expects the values to be there
+            mergeCity(hashCode, temp.charsToDouble());
         }
 
         // Called during the main processing loop
@@ -451,6 +435,27 @@ public class ByteBufferLoadInThreads {
             throw new RuntimeException("Map Collision Error (merge)");
         }
 
+        // Merge a value - we expect the Station to already be present
+        void mergeCity(int h, int temperature) {
+            int hash = h & (HASH_SPACE - 1);
+            MapEntry entry = records[hash];
+            if (entry.hash == h) {
+                records[hash].value.add_measurement(temperature);
+                return;
+            }
+            entry = records[++hash];
+            if (entry.hash == h) {
+                records[hash].value.add_measurement(temperature);
+                return;
+            }
+            entry = records[++hash];
+            if (entry.hash == h) {
+                records[hash].value.add_measurement(temperature);
+                return;
+            }
+            throw new RuntimeException("Hash code not present in array");
+        }
+
         // Called during the final data merging and during the fragment processing
         void mergeCity(Station city) {
             // add a city, or if already present combine two sets of measurements
@@ -458,11 +463,11 @@ public class ByteBufferLoadInThreads {
             int hash = h & (HASH_SPACE - 1);
 
             MapEntry entry = records[hash];
+            // Search forward looking for the city, merge if we find it, add it if we find a null
             if (entry == null) {
                 records[hash] = new MapEntry(h, city);
                 return;
             }
-            // Search forward looking for the city, merge if we find it, add it if we find a null
             if (entry.hash == h) {
                 entry.value.combine_results(city);
                 return;
@@ -513,13 +518,13 @@ class ByteArrayWindow {
      */
     int charsToDouble() {
         if (buffer[startIndex] == '-') {
-            if (length() == 4) {
+            if (endIndex - startIndex == 4) {
                 return -buffer[startIndex + 1] * 10 - buffer[startIndex + 3] + 528;
             } else {
                 return -buffer[startIndex + 1] * 100 - buffer[startIndex + 2] * 10 - buffer[startIndex + 4] + 5328;
             }
         } else {
-            if (length() == 3) {
+            if (endIndex - startIndex == 3) {
                 return buffer[startIndex] * 10 + buffer[startIndex + 2] - 528;
             } else {
                 return buffer[startIndex] * 100 + buffer[startIndex + 1] * 10 + buffer[startIndex + 3] - 5328;
@@ -527,13 +532,6 @@ class ByteArrayWindow {
         }
     }
 
-    byte[] getArray() {
-        return Arrays.copyOfRange(buffer, startIndex, endIndex);
-    }
-
-    public int length() {
-        return endIndex - startIndex;
-    }
 }
 
 
