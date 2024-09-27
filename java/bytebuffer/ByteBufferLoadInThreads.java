@@ -239,7 +239,9 @@ public class ByteBufferLoadInThreads {
             results.startFragment = baw.getArray();
 
             // Main loop through block
-            ByteArrayWindow name = new ByteArrayWindow(array, bufferPosition);
+            // inline the ByteArrayWindow
+            int nameStart = bufferPosition;
+            int nameEnd = bufferPosition;
             boolean readingName = true;
             int h = 0;
             // inlining the decimal conversion
@@ -251,29 +253,29 @@ public class ByteBufferLoadInThreads {
                 // read until we get to the delimiter and the newline
                 if (b == ';') {
                     readingName = false;
-                    name.endIndex = bufferPosition;
+//                    name.endIndex = bufferPosition;
+                    nameEnd = bufferPosition;
                 } else if (readingName) {
-                    name.endIndex++;
                     h = 31 * h + b;
                 } else if (b != '\n') { // only consider chr=13 as newline while reading numbers
-//                    value.endIndex++;
                     if (b == '-') {
                         sign = -1;
                     } else if (b != '.') {
                         temperature = temperature * 10 + (b - '0');
                     }
                 } else {    // end of line
-                    results.addOrMerge(h, name, sign * temperature);
+                    results.addOrMerge(h, array, nameStart, nameEnd, sign * temperature);
                     temperature = 0;
                     sign = 1;
-                    name.rewind(bufferPosition + 1);
+                    nameStart = bufferPosition + 1;
+                    nameEnd = bufferPosition + 1;
                     readingName = true;
                     h = 0;
                 }
             } // end for
             // If we get to the end and there is still data left, add it to the fragments as the start of the next block
-            if (name.length() > 0) {
-                ByteArrayWindow fragment = new ByteArrayWindow(array, name.startIndex);
+            if (nameStart < limit) {
+                ByteArrayWindow fragment = new ByteArrayWindow(array, nameStart);
                 fragment.endIndex = bufferPosition;
                 results.endFragment = fragment.getArray();
             }
@@ -409,12 +411,13 @@ public class ByteBufferLoadInThreads {
         }
 
         // Called during the main processing loop
-        void addOrMerge(int key, ByteArrayWindow name, int temperature) {
+        void addOrMerge(int key, byte[] buffer, int startIndex, int endIndex, int temperature) {
             int hash = key & (HASH_SPACE - 1);
             // Search forwards search for the entry or a gap
             MapEntry entry = records[hash];
             if (entry == null) {
-                records[hash] = new MapEntry(key, new Station(name.getArray(), key, temperature));
+                byte[] nameArray = Arrays.copyOfRange(buffer, startIndex, endIndex);
+                records[hash] = new MapEntry(key, new Station(nameArray, key, temperature));
                 return;
             }
             if (entry.hash == key) {
@@ -424,7 +427,8 @@ public class ByteBufferLoadInThreads {
 
             entry = records[++hash];
             if (entry == null) {
-                records[hash] = new MapEntry(key, new Station(name.getArray(), key, temperature));
+                byte[] nameArray = Arrays.copyOfRange(buffer, startIndex, endIndex);
+                records[hash] = new MapEntry(key, new Station(nameArray, key, temperature));
                 return;
             }
 
@@ -435,7 +439,8 @@ public class ByteBufferLoadInThreads {
 
             entry = records[++hash];
             if (entry == null) {
-                records[hash] = new MapEntry(key, new Station(name.getArray(), key, temperature));
+                byte[] nameArray = Arrays.copyOfRange(buffer, startIndex, endIndex);
+                records[hash] = new MapEntry(key, new Station(nameArray, key, temperature));
                 return;
             }
 
@@ -524,11 +529,6 @@ class ByteArrayWindow {
 
     byte[] getArray() {
         return Arrays.copyOfRange(buffer, startIndex, endIndex);
-    }
-
-    public void rewind(int bufferPosition) {
-        startIndex = bufferPosition;
-        endIndex = bufferPosition;
     }
 
     public int length() {
