@@ -365,30 +365,46 @@ public class ByteBufferLoadInThreads {
 
         // Only called at the end on the line fragments.
         void addCity(byte[] array) {
-            ByteArrayWindow name = new ByteArrayWindow(array, 0);
-            ByteArrayWindow temp = null;
-            boolean readingName = true;
+            int tempStart = 0;
+            int tempEnd = 0;
             // Split the line into name and temperature
             int hashCode = 0;
             for (int i=0; i<array.length; i++) {
                 byte b = array[i];
                 if (b == ';') {
-                    readingName = false;
-                    name.endIndex = i;
-                    temp = new ByteArrayWindow(array, i + 1);
-                    temp.endIndex = array.length;
-                } else if (readingName) {
-                    name.endIndex++;
-                    hashCode = 31 * hashCode + b;
-                } else {
+                    tempStart =  i + 1;
+                    tempEnd = array.length;
                     break;
+                } else {
+                    hashCode = 31 * hashCode + b;
+                }
+            }
+
+            /*
+             * Parse a byte array into a number without having to go through a String first
+             * All the numbers are [-]d{1,2}.d so can take shortcuts with location of decimal place etc.
+             * Returns 10* the actual number
+             */
+            int temp = 0;
+            if (array[tempStart] == '-') {
+                if (tempEnd - tempStart == 4) {
+                    temp = -array[tempStart + 1] * 10 - array[tempStart + 3] + 528;
+                } else {
+                    temp = -array[tempStart + 1] * 100 - array[tempStart + 2] * 10 - array[tempStart + 4] + 5328;
+                }
+            } else {
+                if (tempEnd - tempStart == 3) {
+                    temp = array[tempStart] * 10 + array[tempStart + 2] - 528;
+                } else {
+                    temp = array[tempStart] * 100 + array[tempStart + 1] * 10 + array[tempStart + 3] - 5328;
                 }
             }
 
             // gamble - we will already have seen all the station codes during the block.
             // use a shortcut merge which only considers hashCode and expects the values to be there
-            mergeCity(hashCode, temp.charsToDouble());
+            mergeCity(hashCode, temp);
         }
+
 
         // Called during the main processing loop
         void addOrMerge(int key, byte[] buffer, int startIndex, int endIndex, int temperature) {
@@ -489,45 +505,6 @@ public class ByteBufferLoadInThreads {
             throw new RuntimeException("Map Collision Error (merge/put)");
         }
     }
-}
-
-
-/**
- * Holds the start and end addresses of a substring within a byte array.
- * Has methods to retrieve copies of the substring where required.
- */
-class ByteArrayWindow {
-    final byte[] buffer;
-    int startIndex;
-    int endIndex;
-
-    public ByteArrayWindow(byte[] buffer, int startIndex) {
-        this.buffer = buffer;
-        this.startIndex = startIndex;
-        this.endIndex = startIndex;
-    }
-
-    /**
-     * Parse a byte array into a number without having to go through a String first
-     * All the numbers are [-]d{1,2}.d so can take shortcuts with location of decimal place etc.
-     * Returns 10* the actual number
-     */
-    int charsToDouble() {
-        if (buffer[startIndex] == '-') {
-            if (endIndex - startIndex == 4) {
-                return -buffer[startIndex + 1] * 10 - buffer[startIndex + 3] + 528;
-            } else {
-                return -buffer[startIndex + 1] * 100 - buffer[startIndex + 2] * 10 - buffer[startIndex + 4] + 5328;
-            }
-        } else {
-            if (endIndex - startIndex == 3) {
-                return buffer[startIndex] * 10 + buffer[startIndex + 2] - 528;
-            } else {
-                return buffer[startIndex] * 100 + buffer[startIndex + 1] * 10 + buffer[startIndex + 3] - 5328;
-            }
-        }
-    }
-
 }
 
 
