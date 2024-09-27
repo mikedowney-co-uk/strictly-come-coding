@@ -105,9 +105,9 @@ public class ByteBufferLoadInThreads {
             }
             ListOfCities resultsToAdd = processors[i].results;
             // Merges a result set into the final ListOfCities.
-            for (ListOfCities.MapEntry m : resultsToAdd.records) {
-                if (m != null) {
-                    overallResults.mergeCity(m.value);
+            for (Station s : resultsToAdd.records) {
+                if (s != null) {
+                    overallResults.mergeCity(s);
                 }
             }
             processors[i].close();
@@ -116,12 +116,11 @@ public class ByteBufferLoadInThreads {
 
     private static void sortAndDisplay(ListOfCities overallResults) {
         TreeMap<String, Station> sortedCities = new TreeMap<>();
-        for (ListOfCities.MapEntry m : overallResults.records) {
-            if (m != null) {
-                Station c = m.value;
+        for (Station s : overallResults.records) {
+            if (s != null) {
                 sortedCities.put(
-                        new String(c.name, StandardCharsets.UTF_8),
-                        c);
+                        new String(s.name, StandardCharsets.UTF_8),
+                        s);
             }
         }
 
@@ -220,15 +219,15 @@ public class ByteBufferLoadInThreads {
             results.endFragment = null;
 
             // Read up to the first newline and add it as a fragment (potential end of previous block)
-            int bufferPosition = 0;
-            byte b = array[bufferPosition++];
+            int bufferPosition = -1;
+            byte b = array[++bufferPosition];
             while (b != '\n') {
-                b = array[bufferPosition++];
+                b = array[++bufferPosition];
             }
-            results.startFragment = Arrays.copyOfRange(array, 0, bufferPosition - 1);
+            results.startFragment = Arrays.copyOfRange(array, 0, bufferPosition);
 
             // Main loop through block
-            int nameStart = bufferPosition;
+            int nameStart = ++bufferPosition;
             int nameEnd = bufferPosition;
             boolean readingName = true;
             int h = 0;
@@ -236,12 +235,12 @@ public class ByteBufferLoadInThreads {
             int sign = 1;
             int temperature = 0;
 
-            for (; bufferPosition < limit; bufferPosition++) {
-                b = array[bufferPosition];
+            while (bufferPosition < limit) {
+                b = array[bufferPosition++];
                 // read until we get to the delimiter and the newline
                 if (b == ';') {
                     readingName = false;
-                    nameEnd = bufferPosition;
+                    nameEnd = bufferPosition - 1;
                 } else if (readingName) {
                     h = 31 * h + b; // calculate the hash of the name
                 } else if (b != '\n') { // only consider chr=13 as newline while reading numbers
@@ -254,12 +253,12 @@ public class ByteBufferLoadInThreads {
                     results.addOrMerge(h, array, nameStart, nameEnd, sign * temperature);
                     temperature = 0;
                     sign = 1;
-                    nameStart = bufferPosition + 1;
-                    nameEnd = bufferPosition + 1;
+                    nameStart = bufferPosition;
+                    nameEnd = bufferPosition;
                     readingName = true;
                     h = 0;
                 }
-            } // end for
+            } // end loop
             // If we get to the end and there is still data left, add it to the fragments as the start of the next block
             if (nameStart < limit) {
                 results.endFragment = Arrays.copyOfRange(array, nameStart, limit);
@@ -309,11 +308,11 @@ public class ByteBufferLoadInThreads {
         public int total;
         public int maxT;
         public int minT;
-        public final int hashCode;
+        public final int hash;
 
         Station(byte[] name, int hash, int temp) {
             this.name = name;
-            this.hashCode = hash;
+            this.hash = hash;
             this.total = temp;
             this.measurements = 1;
             this.minT = temp;
@@ -348,14 +347,12 @@ public class ByteBufferLoadInThreads {
     // Array based 'map' which is only combined at the end
     // Also holds the fragments for the current block which are read after each block
     static class ListOfCities {
-        public record MapEntry(int hash, Station value) {
-        }
 
         // larger values have fewer collisions but the increased array size takes longer to traverse
         static final int HASH_SPACE = 8192;
         // decreasing the hash array size means this needs increasing to at least 4
         static final int COLLISION = 2;
-        public MapEntry[] records = new MapEntry[HASH_SPACE + COLLISION];
+        public Station[] records = new Station[HASH_SPACE + COLLISION];
 
         // startFragment is at the start of the block (or the end of the previous block)
         public byte[] startFragment;
@@ -388,8 +385,7 @@ public class ByteBufferLoadInThreads {
                 }
             }
 
-//            Station city = new Station(name.getArray(), hashCode, temp.charsToDouble());
-            // big gamble - we will already have seen all the station codes during the block.
+            // gamble - we will already have seen all the station codes during the block.
             // use a shortcut merge which only considers hashCode and expects the values to be there
             mergeCity(hashCode, temp.charsToDouble());
         }
@@ -398,38 +394,38 @@ public class ByteBufferLoadInThreads {
         void addOrMerge(int key, byte[] buffer, int startIndex, int endIndex, int temperature) {
             int hash = key & (HASH_SPACE - 1);
             // Search forwards search for the entry or a gap
-            MapEntry entry = records[hash];
+            Station entry = records[hash];
             if (entry == null) {
                 byte[] nameArray = Arrays.copyOfRange(buffer, startIndex, endIndex);
-                records[hash] = new MapEntry(key, new Station(nameArray, key, temperature));
+                records[hash] = new Station(nameArray, key, temperature);
                 return;
             }
             if (entry.hash == key) {
-                entry.value.add_measurement(temperature);
+                entry.add_measurement(temperature);
                 return;
             }
 
             entry = records[++hash];
             if (entry == null) {
                 byte[] nameArray = Arrays.copyOfRange(buffer, startIndex, endIndex);
-                records[hash] = new MapEntry(key, new Station(nameArray, key, temperature));
+                records[hash] = new Station(nameArray, key, temperature);
                 return;
             }
 
             if (entry.hash == key) {
-                entry.value.add_measurement(temperature);
+                entry.add_measurement(temperature);
                 return;
             }
 
             entry = records[++hash];
             if (entry == null) {
                 byte[] nameArray = Arrays.copyOfRange(buffer, startIndex, endIndex);
-                records[hash] = new MapEntry(key, new Station(nameArray, key, temperature));
+                records[hash] = new Station(nameArray, key, temperature);
                 return;
             }
 
             if (entry.hash == key) {
-                entry.value.add_measurement(temperature);
+                entry.add_measurement(temperature);
             }
             // don't fail silently, fail kicking and screaming if we can't store the value.
             throw new RuntimeException("Map Collision Error (merge)");
@@ -438,19 +434,19 @@ public class ByteBufferLoadInThreads {
         // Merge a value - we expect the Station to already be present
         void mergeCity(int h, int temperature) {
             int hash = h & (HASH_SPACE - 1);
-            MapEntry entry = records[hash];
+            Station entry = records[hash];
             if (entry.hash == h) {
-                records[hash].value.add_measurement(temperature);
+                records[hash].add_measurement(temperature);
                 return;
             }
             entry = records[++hash];
             if (entry.hash == h) {
-                records[hash].value.add_measurement(temperature);
+                records[hash].add_measurement(temperature);
                 return;
             }
             entry = records[++hash];
             if (entry.hash == h) {
-                records[hash].value.add_measurement(temperature);
+                records[hash].add_measurement(temperature);
                 return;
             }
             throw new RuntimeException("Hash code not present in array");
@@ -459,35 +455,35 @@ public class ByteBufferLoadInThreads {
         // Called during the final data merging and during the fragment processing
         void mergeCity(Station city) {
             // add a city, or if already present combine two sets of measurements
-            int h = city.hashCode;
+            int h = city.hash;
             int hash = h & (HASH_SPACE - 1);
 
-            MapEntry entry = records[hash];
+            Station entry = records[hash];
             // Search forward looking for the city, merge if we find it, add it if we find a null
             if (entry == null) {
-                records[hash] = new MapEntry(h, city);
+                records[hash] = city;
                 return;
             }
             if (entry.hash == h) {
-                entry.value.combine_results(city);
+                entry.combine_results(city);
                 return;
             }
             entry = records[++hash];
             if (entry == null) {
-                records[hash] = new MapEntry(h, city);
+                records[hash] = city;
                 return;
             }
             if (entry.hash == h) {
-                entry.value.combine_results(city);
+                entry.combine_results(city);
                 return;
             }
             entry = records[++hash];
             if (entry == null) {
-                records[hash] = new MapEntry(h, city);
+                records[hash] = city;
                 return;
             }
             if (entry.hash == h) {
-                entry.value.combine_results(city);
+                entry.combine_results(city);
                 return;
             }
             throw new RuntimeException("Map Collision Error (merge/put)");
