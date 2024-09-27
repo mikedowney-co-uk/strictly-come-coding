@@ -78,3 +78,9 @@ There are additional optimisations where methods are inlined or references to bu
 slices are used instead of making copies of arrays.
 
 After several rounds of profiling and optimising, this runs in less than 12 seconds.
+
+### 4.  Using Arrays for (almost) Everything
+
+After finding that _Unsafe_ isn't actually faster than using byte arrays, this version
+reverted back to using standard array reading. It also replaces HashMap with a custom array-backed
+map implementation. Further optimisations mean this can run in under 8 seconds.
