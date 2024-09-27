@@ -240,23 +240,32 @@ public class ByteBufferLoadInThreads {
 
             // Main loop through block
             ByteArrayWindow name = new ByteArrayWindow(array, bufferPosition);
-            ByteArrayWindow value = new ByteArrayWindow(array, bufferPosition);
             boolean readingName = true;
             int h = 0;
+            // inlining the decimal conversion
+            int sign = 1;
+            int temperature = 0;
+
             for (; bufferPosition < limit; bufferPosition++) {
                 b = array[bufferPosition];
                 // read until we get to the delimiter and the newline
                 if (b == ';') {
                     readingName = false;
                     name.endIndex = bufferPosition;
-                    value.rewind(bufferPosition + 1);
                 } else if (readingName) {
                     name.endIndex++;
                     h = 31 * h + b;
                 } else if (b != '\n') { // only consider chr=13 as newline while reading numbers
-                    value.endIndex++;
+//                    value.endIndex++;
+                    if (b == '-') {
+                        sign = -1;
+                    } else if (b != '.') {
+                        temperature = temperature * 10 + (b - '0');
+                    }
                 } else {    // end of line
-                    results.addOrMerge(h, name, value.charsToDouble());
+                    results.addOrMerge(h, name, sign * temperature);
+                    temperature = 0;
+                    sign = 1;
                     name.rewind(bufferPosition + 1);
                     readingName = true;
                     h = 0;
@@ -348,7 +357,8 @@ public class ByteBufferLoadInThreads {
 
 
     // class which holds weather stations and updates them
-    // Array based 'map'.
+    // Array based 'map' which is only combined at the end
+    // Also holds the fragments for the current block which are read after each block
     static class ListOfCities {
         public record MapEntry(int hash, Station value) {
         }
@@ -529,6 +539,7 @@ class ByteArrayWindow {
 
 /**
  * Holds a byte array along with methods to add bytes and concatenate arrays.
+ * Only used at the end, joining fragments and preparing output.
  */
 class AppendableByteArray {
     int length;
@@ -540,7 +551,7 @@ class AppendableByteArray {
      (Taumatawhakatangihangakoauauotamateaturipukakapikimaungahoronukupokaiwhenuakitanatahu)
      is 85 characters and I hope that doesn't appear in the test data.
      And that place in Wales (Llanfairpwllgwyngyllgogerychwyrndrobwllllantysiliogogogoch)
-     if 58 but I don't think that's in the data either.
+     is 58 but I don't think that's in the data either.
      */
     AppendableByteArray() {
         length = 0;
