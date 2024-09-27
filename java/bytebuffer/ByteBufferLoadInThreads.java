@@ -76,6 +76,7 @@ public class ByteBufferLoadInThreads {
         } // end while
 //        System.out.println("blockNumber = " + blockNumber);
         ListOfCities overallResults = new ListOfCities(0);
+        // wait for threads to end and combine the results
         waitForThreads(runningThreads, overallResults);
 
         processFragments(overallResults);
@@ -385,7 +386,7 @@ public class ByteBufferLoadInThreads {
              * All the numbers are [-]d{1,2}.d so can take shortcuts with location of decimal place etc.
              * Returns 10* the actual number
              */
-            int temp = 0;
+            int temp;
             if (array[tempStart] == '-') {
                 if (tempEnd - tempStart == 4) {
                     temp = -array[tempStart + 1] * 10 - array[tempStart + 3] + 528;
@@ -402,9 +403,24 @@ public class ByteBufferLoadInThreads {
 
             // gamble - we will already have seen all the station codes during the block.
             // use a shortcut merge which only considers hashCode and expects the values to be there
-            mergeCity(hashCode, temp);
+            int hash = hashCode & (HASH_SPACE - 1);
+            Station entry = records[hash];
+            if (entry.hash == hashCode) {
+                records[hash].add_measurement(temp);
+                return;
+            }
+            entry = records[++hash];
+            if (entry.hash == hashCode) {
+                records[hash].add_measurement(temp);
+                return;
+            }
+            entry = records[++hash];
+            if (entry.hash == hashCode) {
+                records[hash].add_measurement(temp);
+                return;
+            }
+            throw new RuntimeException("Hash code not present in array");
         }
-
 
         // Called during the main processing loop
         void addOrMerge(int key, byte[] buffer, int startIndex, int endIndex, int temperature) {
@@ -447,26 +463,6 @@ public class ByteBufferLoadInThreads {
             throw new RuntimeException("Map Collision Error (merge)");
         }
 
-        // Merge a value - we expect the Station to already be present
-        void mergeCity(int h, int temperature) {
-            int hash = h & (HASH_SPACE - 1);
-            Station entry = records[hash];
-            if (entry.hash == h) {
-                records[hash].add_measurement(temperature);
-                return;
-            }
-            entry = records[++hash];
-            if (entry.hash == h) {
-                records[hash].add_measurement(temperature);
-                return;
-            }
-            entry = records[++hash];
-            if (entry.hash == h) {
-                records[hash].add_measurement(temperature);
-                return;
-            }
-            throw new RuntimeException("Hash code not present in array");
-        }
 
         // Called during the final data merging and during the fragment processing
         void mergeCity(Station city) {
