@@ -15,7 +15,11 @@ import java.util.concurrent.*;
 /**
  * Submit all the jobs at once.
  * Use callbacks to store the intermediate results.
- * Should allow all threads to execute simultaneously
+ * Should allow all threads to execute simultaneously.
+ * <p>
+ * Not faster than the one which waits for each thread to finish - possibly because
+ * the other one shares buffers and results storage but this needs to instantiate fresh
+ * ones for each block
  */
 public class ArrayMapQueuedThreads {
 
@@ -27,7 +31,7 @@ public class ArrayMapQueuedThreads {
 
     public static int NUM_BLOCKS;
 
-    public static void main(String[] args) throws IOException, ExecutionException, InterruptedException, TimeoutException {
+    public static void main(String[] args) throws Exception {
         long startTime = System.currentTimeMillis();
         new ArrayMapQueuedThreads().go();
         long endTime = System.currentTimeMillis();

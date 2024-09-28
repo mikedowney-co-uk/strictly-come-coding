@@ -16,8 +16,7 @@ import java.util.concurrent.*;
 /**
  * Reads the file into a set of ByteBuffers
  * Use byte arrays instead of Strings for the City names.
- * Based on the version using Unsafe (which had all the optimisations in the data structures)
- * but is back to using array reads instead.
+ * Used the array-backed map
  * <p>
  * Add -ea to VM options to enable the asserts.
  */
@@ -27,8 +26,7 @@ public class ByteBufferLoadInThreads {
 
     static final String file = "measurements.txt";
 
-    // Lets hope nobody tries to run this on a single core machine
-    final int threads = Runtime.getRuntime().availableProcessors() - 1;
+    final int threads = Runtime.getRuntime().availableProcessors();
     RowFragments fragmentStore;
     static final int BUFFERSIZE = 1024 * 1024;
     ProcessData[] processors;
@@ -83,20 +81,16 @@ public class ByteBufferLoadInThreads {
         // wait for threads to end and combine the results
         waitForThreads(runningThreads, overallResults);
 
-        processFragments(overallResults);
-        sortAndDisplay(overallResults);
-        threadPoolExecutor.shutdown();
-        threadPoolExecutor.close();
-    }
-
-
-    private void processFragments(ListOfCities overallResults) {
+        // add the fragments into the results now.
         for (int f = 0; f < NUM_BLOCKS; f++) {
             byte[] line = fragmentStore.getJoinedFragments(f);
             if (line != null) {
                 overallResults.addCity(line);
             }
         }
+        sortAndDisplay(overallResults);
+        threadPoolExecutor.shutdown();
+        threadPoolExecutor.close();
     }
 
     // wait for any final threads to finish and merge the results.
@@ -355,8 +349,8 @@ public class ByteBufferLoadInThreads {
 
         // larger values have fewer collisions but the increased array size takes longer to traverse
         static final int HASH_SPACE = 8192;
-        // decreasing the hash array size means this needs increasing to at least 4
-        static final int COLLISION = 2;
+        static final int COLLISION = 2; // number of extra spaces needed for hash collisions
+        // decreasing the hash array size below 8192 means this needs increasing to at least 6
         public Station[] records = new Station[HASH_SPACE + COLLISION];
 
         // startFragment is at the start of the block (or the end of the previous block)
@@ -462,6 +456,7 @@ public class ByteBufferLoadInThreads {
 
             if (entry.hash == key) {
                 entry.add_measurement(temperature);
+                return;
             }
             // don't fail silently, fail kicking and screaming if we can't store the value.
             throw new RuntimeException("Map Collision Error (merge)");
