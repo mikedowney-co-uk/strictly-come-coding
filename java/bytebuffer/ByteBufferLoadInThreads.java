@@ -22,14 +22,9 @@ import java.util.concurrent.*;
  */
 public class ByteBufferLoadInThreads {
 
-    ExecutorService threadPoolExecutor;
 
     static final String file = "measurements.txt";
-
-    final int threads = Runtime.getRuntime().availableProcessors();
-    RowFragments fragmentStore;
     static final int BUFFERSIZE = 1024 * 1024;
-    ProcessData[] processors;
 
     static int NUM_BLOCKS;
 
@@ -43,13 +38,18 @@ public class ByteBufferLoadInThreads {
         System.out.printf("Took %.2f s\n", (endTime - startTime) / 1000.0);
     }
 
+    // All the blocks of code which were separate methods have now been inlined.
+    // That wasn't to save time of itself but it meant I could move from instance
+    // variables to local variables, which is noticeably faster.
     private void go() throws Exception {
+        final int threads = Runtime.getRuntime().availableProcessors();
 //        System.out.println("Using " + threads + " cores");
-        System.out.println("Estimated number of blocks: " + NUM_BLOCKS);
-        threadPoolExecutor = Executors.newFixedThreadPool(threads);
+
+//        System.out.println("Estimated number of blocks: " + NUM_BLOCKS);
+        ExecutorService threadPoolExecutor = Executors.newFixedThreadPool(threads);
         Future<?>[] runningThreads = new Future<?>[threads];
-        processors = new ProcessData[threads];
-        fragmentStore = new RowFragments();
+        ProcessData[] processors = new ProcessData[threads];
+        RowFragments fragmentStore = new RowFragments();
 
         for (int i = 0; i < threads; i++) {
             processors[i] = new ProcessData(ByteBuffer.allocate(BUFFERSIZE), i);
@@ -75,26 +75,10 @@ public class ByteBufferLoadInThreads {
                     runningThreads[thread] = null;
                 }
             } // end for threads
-        } // end while
-        System.out.println("blockNumber = " + blockNumber);
+        } // end while - no more data.
+//        System.out.println("blockNumber = " + blockNumber);
         ListOfCities overallResults = new ListOfCities(0);
         // wait for threads to end and combine the results
-        waitForThreads(runningThreads, overallResults);
-
-        // add the fragments into the results now.
-        for (int f = 0; f < NUM_BLOCKS; f++) {
-            byte[] line = fragmentStore.getJoinedFragments(f);
-            if (line != null) {
-                overallResults.addCity(line);
-            }
-        }
-        sortAndDisplay(overallResults);
-        threadPoolExecutor.shutdown();
-        threadPoolExecutor.close();
-    }
-
-    // wait for any final threads to finish and merge the results.
-    private void waitForThreads(Future<?>[] runningThreads, ListOfCities overallResults) throws Exception {
         for (int i = 0; i < threads; i++) {
             if (runningThreads[i] != null) {
                 ListOfCities resultToAdd = (ListOfCities) runningThreads[i].get();
@@ -111,15 +95,24 @@ public class ByteBufferLoadInThreads {
             }
             processors[i].close();
         }
+
+        // add the fragments into the results now.
+        for (int f = 0; f < NUM_BLOCKS; f++) {
+            byte[] line = fragmentStore.getJoinedFragments(f);
+            if (line != null) {
+                overallResults.addCity(line);
+            }
+        }
+        sortAndDisplay(overallResults);
+        threadPoolExecutor.shutdown();
+        threadPoolExecutor.close();
     }
 
     private static void sortAndDisplay(ListOfCities overallResults) {
         TreeMap<String, Station> sortedCities = new TreeMap<>();
         for (Station s : overallResults.records) {
             if (s != null) {
-                sortedCities.put(
-                        new String(s.name, StandardCharsets.UTF_8),
-                        s);
+                sortedCities.put(new String(s.name, StandardCharsets.UTF_8), s);
             }
         }
 
@@ -143,10 +136,10 @@ public class ByteBufferLoadInThreads {
             System.out.println(output.asString());
             count += city.measurements;
         }
-        System.out.println("length = " + sortedCities.size());
-        System.out.println("count = " + count);
-        assert (sortedCities.size() == 413);
-        assert count == 1_000_000_000;
+//        System.out.println("length = " + sortedCities.size());
+//        System.out.println("count = " + count);
+//        assert (sortedCities.size() == 413);
+//        assert count == 1_000_000_000;
     }
 
     // Only used in the final display
@@ -181,19 +174,16 @@ public class ByteBufferLoadInThreads {
 
     static class ProcessData {
 
-        ByteBuffer innerBuffer;
+        ByteBuffer buffer;
         RandomAccessFile raFile;
         FileChannel channel;
 
         int blockNumber;
-        int limit;
-        byte[] array;
 
         ListOfCities results = new ListOfCities(blockNumber);
 
         public ProcessData(ByteBuffer buffer, int blockNumber) throws FileNotFoundException {
-            this.innerBuffer = buffer;
-            this.array = buffer.array();
+            this.buffer = buffer;
             this.blockNumber = blockNumber;
             this.raFile = new RandomAccessFile(file, "r");
             this.channel = raFile.getChannel();
@@ -206,13 +196,14 @@ public class ByteBufferLoadInThreads {
 
         ListOfCities process() throws IOException {
             channel.position((long) blockNumber * BUFFERSIZE);
-            int status = channel.read(innerBuffer);
+            int status = channel.read(buffer);
             if (status == -1) {
                 return null;
             }
-            innerBuffer.flip();
+            buffer.flip();
+            byte[] array = buffer.array();
+            int limit = buffer.limit();
 
-            this.limit = innerBuffer.limit();
             // block number for the fragment collection
             results.blockNumber = blockNumber;
             results.endFragment = null;
@@ -262,7 +253,7 @@ public class ByteBufferLoadInThreads {
             if (nameStart < limit) {
                 results.endFragment = Arrays.copyOfRange(array, nameStart, limit);
             }
-            innerBuffer.clear();
+            buffer.clear();
             return results;
         }
     }
@@ -368,10 +359,10 @@ public class ByteBufferLoadInThreads {
             int tempEnd = 0;
             // Split the line into name and temperature
             int hashCode = 0;
-            for (int i=0; i<array.length; i++) {
+            for (int i = 0; i < array.length; i++) {
                 byte b = array[i];
                 if (b == ';') {
-                    tempStart =  i + 1;
+                    tempStart = i + 1;
                     tempEnd = array.length;
                     break;
                 } else {
