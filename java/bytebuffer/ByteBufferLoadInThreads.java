@@ -49,7 +49,6 @@ public class ByteBufferLoadInThreads {
         ExecutorService threadPoolExecutor = Executors.newFixedThreadPool(threads);
         Future<?>[] runningThreads = new Future<?>[threads];
         ProcessData[] processors = new ProcessData[threads];
-        RowFragments fragmentStore = new RowFragments();
 
         for (int i = 0; i < threads; i++) {
             processors[i] = new ProcessData(ByteBuffer.allocate(BUFFERSIZE), i);
@@ -68,7 +67,7 @@ public class ByteBufferLoadInThreads {
                     ListOfCities resultToAdd = (ListOfCities) runningThreads[thread].get();
                     // Note: we re-use the ListOfCities, 1 per processor, so only collect at the end
                     if (resultToAdd != null) {
-                        fragmentStore.storeFragments(resultToAdd);
+                        RowFragments.storeFragments(resultToAdd);
                     } else {
                         weStillHaveData = false;
                     }
@@ -83,7 +82,7 @@ public class ByteBufferLoadInThreads {
             if (runningThreads[i] != null) {
                 ListOfCities resultToAdd = (ListOfCities) runningThreads[i].get();
                 if (resultToAdd != null) {
-                    fragmentStore.storeFragments(resultToAdd);
+                    RowFragments.storeFragments(resultToAdd);
                 }
             }
             ListOfCities resultsToAdd = processors[i].results;
@@ -98,7 +97,7 @@ public class ByteBufferLoadInThreads {
 
         // add the fragments into the results now.
         for (int f = 0; f < NUM_BLOCKS; f++) {
-            byte[] line = fragmentStore.getJoinedFragments(f);
+            byte[] line = RowFragments.getJoinedFragments(f);
             if (line != null) {
                 overallResults.addCity(line);
             }
@@ -136,8 +135,8 @@ public class ByteBufferLoadInThreads {
             System.out.println(output.asString());
             count += city.measurements;
         }
-//        System.out.println("length = " + sortedCities.size());
-//        System.out.println("count = " + count);
+        System.out.println("length = " + sortedCities.size());
+        System.out.println("count = " + count);
 //        assert (sortedCities.size() == 413);
 //        assert count == 1_000_000_000;
     }
@@ -260,10 +259,10 @@ public class ByteBufferLoadInThreads {
 
 
     static class RowFragments {
-        byte[][] lineEnds = new byte[NUM_BLOCKS][];
-        byte[][] lineStarts = new byte[NUM_BLOCKS][];
+        static byte[][] lineEnds = new byte[NUM_BLOCKS][];
+        static byte[][] lineStarts = new byte[NUM_BLOCKS][];
 
-        byte[] getJoinedFragments(int number) {
+        static byte[] getJoinedFragments(int number) {
             // join the start and end fragments together
             byte[] start = lineStarts[number];
             byte[] end = lineEnds[number];
@@ -282,7 +281,7 @@ public class ByteBufferLoadInThreads {
         }
 
         // spare characters at the end of a block will be the start of a row in the next block.
-        public void storeFragments(ListOfCities resultToAdd) {
+        public static void storeFragments(ListOfCities resultToAdd) {
             if (resultToAdd.endFragment != null) {
                 lineStarts[resultToAdd.blockNumber + 1] = resultToAdd.endFragment;
             }
