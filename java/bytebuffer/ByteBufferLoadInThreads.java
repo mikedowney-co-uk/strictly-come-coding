@@ -124,7 +124,7 @@ public class ByteBufferLoadInThreads {
             output.addDelimiter();
             output.appendArray(numberToString(city.minT));
             output.addDelimiter();
-            output.appendArray(String.format("%.1f;", city.total / (city.measurements * 10.0)).getBytes(StandardCharsets.UTF_8));
+            output.appendArray(String.format("%.1f;", city.total / city.measurements).getBytes(StandardCharsets.UTF_8));
 //            System.out.printf("%s;%s;%.1f;%s\n",
 //                    e.getKey(), new String(numberToString(city.minT), StandardCharsets.UTF_8),
 //                    city.total / (city.measurements * 10.0),
@@ -143,12 +143,12 @@ public class ByteBufferLoadInThreads {
     }
 
     // Only used in the final display
-    static byte[] numberToString(int number) {
+    static byte[] numberToString(double number) {
         int length;
         byte[] bytes;
-        if (number < 0) { // eg. -9 (-0.9), -99 (-9.9), -999 (-99.9)
+        if (number < 0) {
             number = -number;  // negative
-            if (number >= 100) {
+            if (number >= 10) {
                 length = 5;
                 bytes = new byte[5]; // 3 digits, 5 characters
             } else {
@@ -157,11 +157,11 @@ public class ByteBufferLoadInThreads {
             }
             bytes[0] = (byte) '-';
         } else { // positive
-            length = number >= 100 ? 4 : 3;
+            length = number >= 10 ? 4 : 3;
             bytes = new byte[length];
         }
-        bytes[length - 1] = (byte) ('0' + (number % 10));
-        number /= 10;
+        bytes[length - 1] = (byte) ('0' + (number*10 % 10));
+//        number /= 10;
         bytes[length - 2] = '.';
         bytes[length - 3] = (byte) ('0' + (number % 10));
         if (number >= 10) {
@@ -222,8 +222,8 @@ public class ByteBufferLoadInThreads {
             boolean readingName = true;
             int h = 0;
             // inlining the decimal conversion
-            int sign = 1;
-            int temperature = 0;
+            double sign = 0.1;
+            double temperature = 0;
 
             while (bufferPosition < limit) {
                 b = array[bufferPosition++];
@@ -235,14 +235,14 @@ public class ByteBufferLoadInThreads {
                     h = 31 * h + b; // calculate the hash of the name
                 } else if (b != '\n') { // only consider chr=13 as newline while reading numbers
                     if (b == '-') {
-                        sign = -1;
+                        sign = -0.1;
                     } else if (b != '.') {
-                        temperature = temperature * 10 + (b - '0');
+                        temperature = temperature * 10.0 + (double) (b - '0');
                     }
                 } else {    // end of line
                     results.addOrMerge(h, array, nameStart, nameEnd, sign * temperature);
-                    temperature = 0;
-                    sign = 1;
+                    temperature = 0.0;
+                    sign = 0.1;
                     nameStart = bufferPosition;
                     nameEnd = bufferPosition;
                     readingName = true;
@@ -295,12 +295,12 @@ public class ByteBufferLoadInThreads {
     static class Station {
         public final byte[] name;
         public int measurements;
-        public int total;
-        public int maxT;
-        public int minT;
+        public double total;
+        public double maxT;
+        public double minT;
         public final int hash;
 
-        Station(byte[] name, int hash, int temp) {
+        Station(byte[] name, int hash, double temp) {
             this.name = name;
             this.hash = hash;
             this.total = temp;
@@ -309,7 +309,7 @@ public class ByteBufferLoadInThreads {
             this.maxT = temp;
         }
 
-        public void add_measurement(int temp) {
+        public void add_measurement(double temp) {
             total += temp;
             measurements++;
             if (temp > maxT) {
@@ -375,18 +375,18 @@ public class ByteBufferLoadInThreads {
              * All the numbers are [-]d{1,2}.d so can take shortcuts with location of decimal place etc.
              * Returns 10* the actual number
              */
-            int temp;
+            double temp;
             if (array[tempStart] == '-') {
                 if (tempEnd - tempStart == 4) {
-                    temp = -array[tempStart + 1] * 10 - array[tempStart + 3] + 528;
+                    temp = -array[tempStart + 1] - array[tempStart + 3]/10.0 + 52.8;
                 } else {
-                    temp = -array[tempStart + 1] * 100 - array[tempStart + 2] * 10 - array[tempStart + 4] + 5328;
+                    temp = array[tempStart + 1] * -10.0 - array[tempStart + 2] - array[tempStart + 4]/10.0 + 532.8;
                 }
             } else {
                 if (tempEnd - tempStart == 3) {
-                    temp = array[tempStart] * 10 + array[tempStart + 2] - 528;
+                    temp = array[tempStart] + array[tempStart + 2] /10.0 - 52.8;
                 } else {
-                    temp = array[tempStart] * 100 + array[tempStart + 1] * 10 + array[tempStart + 3] - 5328;
+                    temp = array[tempStart] * 10.0 + array[tempStart + 1] + array[tempStart + 3]/10.0 - 532.8;
                 }
             }
 
@@ -412,7 +412,7 @@ public class ByteBufferLoadInThreads {
         }
 
         // Called during the main processing loop
-        void addOrMerge(int key, byte[] buffer, int startIndex, int endIndex, int temperature) {
+        void addOrMerge(int key, byte[] buffer, int startIndex, int endIndex, double temperature) {
             int hash = key & (HASH_SPACE - 1);
             // Search forwards search for the entry or a gap
             Station entry = records[hash];
