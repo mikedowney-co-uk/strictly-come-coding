@@ -65,10 +65,7 @@ public class ByteBufferLoadInThreads {
                     runningThreads[thread] = threadPoolExecutor.submit(p::process);
                 } else if (runningThreads[thread].isDone()) {
                     // thread finished, handle result.
-                    ProcessData resultToAdd = (ProcessData) runningThreads[thread].get();
-                    // Note: we re-use the ListOfCities, 1 per processor, so only collect at the end
-                    weStillHaveData = (resultToAdd != null);
-
+                    weStillHaveData = (boolean) runningThreads[thread].get();
                     runningThreads[thread] = null;
                 }
             } // end for threads
@@ -201,11 +198,11 @@ public class ByteBufferLoadInThreads {
             raFile.close();
         }
 
-        ProcessData process() throws IOException {
+        boolean process() throws IOException {
             channel.position((long) blockNumber * BUFFERSIZE);
             int status = channel.read(buffer);
             if (status == -1) {
-                return null;
+                return false;
             }
             buffer.flip();
             byte[] array = buffer.array();
@@ -259,7 +256,7 @@ public class ByteBufferLoadInThreads {
                 lineStarts[blockNumber + 1] = Arrays.copyOfRange(array, nameStart, limit);
             }
             buffer.clear();
-            return this;
+            return true;
         }
 
 
