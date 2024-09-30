@@ -49,10 +49,10 @@ public class ByteBufferLoadInThreads {
         ExecutorService threadPoolExecutor = Executors.newFixedThreadPool(threads);
         Future<?>[] runningThreads = new Future<?>[threads];
         ProcessData[] processors = new ProcessData[threads];
-        RowFragments fragmentStore = new RowFragments();
+//        RowFragments fragmentStore = new RowFragments();
 
         for (int i = 0; i < threads; i++) {
-            processors[i] = new ProcessData(ByteBuffer.allocate(BUFFERSIZE), i, fragmentStore);
+            processors[i] = new ProcessData(ByteBuffer.allocate(BUFFERSIZE), i);
         }
         boolean weStillHaveData = true;
         int blockNumber = 0;
@@ -74,15 +74,13 @@ public class ByteBufferLoadInThreads {
             } // end for threads
         } // end while - no more data.
 //        System.out.println("blockNumber = " + blockNumber);
+
         ProcessData overallResults = null;
         // wait for threads to end and combine the results
         for (int i = 0; i < threads; i++) {
-//            if (runningThreads[i] != null) {
-//                ProcessData resultToAdd = (ProcessData) runningThreads[i].get();
-//                if (resultToAdd != null) {
-//                    fragmentStore.storeFragments(resultToAdd);
-//                }
-//            }
+            if (runningThreads[i] != null) {
+                runningThreads[i].get();
+            }
             if (overallResults == null) {
                 overallResults = processors[i];
             } else {
@@ -99,7 +97,7 @@ public class ByteBufferLoadInThreads {
 
         // add the fragments into the results now.
         for (int f = 0; f < NUM_BLOCKS; f++) {
-            byte[] line = fragmentStore.getJoinedFragments(f);
+            byte[] line = ProcessData.getJoinedFragments(f);
             if (line != null) {
                 overallResults.addCity(line);
             }
@@ -118,7 +116,7 @@ public class ByteBufferLoadInThreads {
         }
 
         Station city; // = new Station("Dummy".getBytes(), -1, 0);
-//        int count = 0;
+        int count = 0;
         for (Map.Entry<String, Station> e : sortedCities.entrySet()) {
             city = e.getValue();
             AppendableByteArray output = new AppendableByteArray();
@@ -135,10 +133,10 @@ public class ByteBufferLoadInThreads {
             System.out.print(e.getKey());
 //            System.out.printf(" (%d)", city.measurements);
             System.out.println(output.asString());
-//            count += city.measurements;
+            count += city.measurements;
         }
-//        System.out.println("length = " + sortedCities.size());
-//        System.out.println("count = " + count);
+        System.out.println("length = " + sortedCities.size());
+        System.out.println("count = " + count);
 //        assert (sortedCities.size() == 413);
 //        assert count == 1_000_000_000;
     }
@@ -187,17 +185,15 @@ public class ByteBufferLoadInThreads {
         // decreasing the hash array size below 8192 means this needs increasing to at least 6
         Station[] records = new Station[HASH_SPACE + COLLISION];
 
-        // startFragment is at the start of the block (or the end of the previous block)
-//        public byte[] startFragments;
-//        public byte[] endFragments;
-        RowFragments fragmentStore;
+        // RowFragments
+        static byte[][] lineEnds = new byte[NUM_BLOCKS][];
+        static byte[][] lineStarts = new byte[NUM_BLOCKS][];
 
-        public ProcessData(ByteBuffer buffer, int blockNumber, RowFragments fragmentStore) throws FileNotFoundException {
+        public ProcessData(ByteBuffer buffer, int blockNumber) throws FileNotFoundException {
             this.buffer = buffer;
             this.blockNumber = blockNumber;
             this.raFile = new RandomAccessFile(file, "r");
             this.channel = raFile.getChannel();
-            this.fragmentStore = fragmentStore;
         }
 
         public void close() throws IOException {
@@ -215,15 +211,15 @@ public class ByteBufferLoadInThreads {
             byte[] array = buffer.array();
             int limit = buffer.limit();
 
-
             // Read up to the first newline and add it as a fragment (potential end of previous block)
             int bufferPosition = -1;
             byte b = array[++bufferPosition];
             while (b != '\n') {
                 b = array[++bufferPosition];
             }
-            fragmentStore.lineEnds[blockNumber] = Arrays.copyOfRange(array, 0, bufferPosition);
-// lineEnds[resultToAdd.blockNumber] = resultToAdd.startFragment;
+            lineEnds[blockNumber] = Arrays.copyOfRange(array, 0, bufferPosition);
+            // lineEnds[resultToAdd.blockNumber] = resultToAdd.startFragment;
+
             // Main loop through block
             int nameStart = ++bufferPosition;
             int nameEnd = bufferPosition;
@@ -260,12 +256,30 @@ public class ByteBufferLoadInThreads {
             // If we get to the end and there is still data left, add it to the fragments as the start of the next block
 // lineStarts[resultToAdd.blockNumber + 1] = resultToAdd.endFragment;
             if (nameStart < limit) {
-                fragmentStore.lineStarts[blockNumber + 1] = Arrays.copyOfRange(array, nameStart, limit);
+                lineStarts[blockNumber + 1] = Arrays.copyOfRange(array, nameStart, limit);
             }
             buffer.clear();
             return this;
         }
 
+
+        static byte[] getJoinedFragments(int number) {
+            // join the start and end fragments together
+            byte[] start = lineStarts[number];
+            byte[] end = lineEnds[number];
+            if (start == null && end == null) {
+                return null;
+            } else if (start == null) {
+                return end;
+            } else if (end == null) {
+                return start;
+            } else {
+                byte[] bufferToBuild = new byte[start.length + end.length];
+                System.arraycopy(start, 0, bufferToBuild, 0, start.length);
+                System.arraycopy(end, 0, bufferToBuild, start.length, end.length);
+                return bufferToBuild;
+            }
+        }
 
         // Only called at the end on the line fragments.
         void addCity(byte[] array) {
@@ -407,39 +421,6 @@ public class ByteBufferLoadInThreads {
         }
     }
 
-
-    static class RowFragments {
-        byte[][] lineEnds = new byte[NUM_BLOCKS][];
-        byte[][] lineStarts = new byte[NUM_BLOCKS][];
-
-        byte[] getJoinedFragments(int number) {
-            // join the start and end fragments together
-            byte[] start = lineStarts[number];
-            byte[] end = lineEnds[number];
-            if (start == null && end == null) {
-                return null;
-            } else if (start == null) {
-                return end;
-            } else if (end == null) {
-                return start;
-            } else {
-                byte[] bufferToBuild = new byte[start.length + end.length];
-                System.arraycopy(start, 0, bufferToBuild, 0, start.length);
-                System.arraycopy(end, 0, bufferToBuild, start.length, end.length);
-                return bufferToBuild;
-            }
-        }
-
-        // spare characters at the end of a block will be the start of a row in the next block.
-//        public void storeFragments(ProcessData resultToAdd) {
-//            if (resultToAdd.endFragment != null) {
-//                lineStarts[resultToAdd.blockNumber + 1] = resultToAdd.endFragment;
-//            }
-//            if (resultToAdd.startFragment != null) {
-//                lineEnds[resultToAdd.blockNumber] = resultToAdd.startFragment;
-//            }
-//        }
-    }
 
     static class Station {
         public final byte[] name;
