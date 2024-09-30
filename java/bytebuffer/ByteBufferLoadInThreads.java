@@ -65,7 +65,7 @@ public class ByteBufferLoadInThreads {
                     runningThreads[thread] = threadPoolExecutor.submit(p::process);
                 } else if (runningThreads[thread].isDone()) {
                     // thread finished, handle result.
-                    ListOfCities resultToAdd = (ListOfCities) runningThreads[thread].get();
+                    ProcessData resultToAdd = (ProcessData) runningThreads[thread].get();
                     // Note: we re-use the ListOfCities, 1 per processor, so only collect at the end
                     if (resultToAdd != null) {
                         fragmentStore.storeFragments(resultToAdd);
@@ -77,20 +77,19 @@ public class ByteBufferLoadInThreads {
             } // end for threads
         } // end while - no more data.
 //        System.out.println("blockNumber = " + blockNumber);
-        ListOfCities overallResults = null;
+        ProcessData overallResults = null;
         // wait for threads to end and combine the results
         for (int i = 0; i < threads; i++) {
             if (runningThreads[i] != null) {
-                ListOfCities resultToAdd = (ListOfCities) runningThreads[i].get();
+                ProcessData resultToAdd = (ProcessData) runningThreads[i].get();
                 if (resultToAdd != null) {
                     fragmentStore.storeFragments(resultToAdd);
                 }
             }
             if (overallResults == null) {
-                overallResults = processors[i].results;
-            }
-            else {
-                ListOfCities resultsToAdd = processors[i].results;
+                overallResults = processors[i];
+            } else {
+                ProcessData resultsToAdd = processors[i];
                 // Merges a result set into the final ListOfCities.
                 for (Station s : resultsToAdd.records) {
                     if (s != null) {
@@ -113,7 +112,7 @@ public class ByteBufferLoadInThreads {
         threadPoolExecutor.close();
     }
 
-    private static void sortAndDisplay(ListOfCities overallResults) {
+    private void sortAndDisplay(ProcessData overallResults) {
         TreeMap<String, Station> sortedCities = new TreeMap<>();
         for (Station s : overallResults.records) {
             if (s != null) {
@@ -185,7 +184,18 @@ public class ByteBufferLoadInThreads {
 
         int blockNumber;
 
-        ListOfCities results = new ListOfCities(blockNumber);
+//        ListOfCities results = new ListOfCities(blockNumber);
+
+        // larger values have fewer collisions but the increased array size takes longer to traverse
+        static final int HASH_SPACE = 8192;
+        static final int COLLISION = 2; // number of extra spaces needed for hash collisions
+        // decreasing the hash array size below 8192 means this needs increasing to at least 6
+        public Station[] records = new Station[HASH_SPACE + COLLISION];
+
+        // startFragment is at the start of the block (or the end of the previous block)
+        public byte[] startFragment;
+        public byte[] endFragment;
+
 
         public ProcessData(ByteBuffer buffer, int blockNumber) throws FileNotFoundException {
             this.buffer = buffer;
@@ -199,7 +209,7 @@ public class ByteBufferLoadInThreads {
             raFile.close();
         }
 
-        ListOfCities process() throws IOException {
+        ProcessData process() throws IOException {
             channel.position((long) blockNumber * BUFFERSIZE);
             int status = channel.read(buffer);
             if (status == -1) {
@@ -209,9 +219,7 @@ public class ByteBufferLoadInThreads {
             byte[] array = buffer.array();
             int limit = buffer.limit();
 
-            // block number for the fragment collection
-            results.blockNumber = blockNumber;
-            results.endFragment = null;
+            endFragment = null;
 
             // Read up to the first newline and add it as a fragment (potential end of previous block)
             int bufferPosition = -1;
@@ -219,7 +227,7 @@ public class ByteBufferLoadInThreads {
             while (b != '\n') {
                 b = array[++bufferPosition];
             }
-            results.startFragment = Arrays.copyOfRange(array, 0, bufferPosition);
+            startFragment = Arrays.copyOfRange(array, 0, bufferPosition);
 
             // Main loop through block
             int nameStart = ++bufferPosition;
@@ -245,7 +253,7 @@ public class ByteBufferLoadInThreads {
                         temperature = temperature * 10 + (b - '0');
                     }
                 } else {    // end of line
-                    results.addOrMerge(h, array, nameStart, nameEnd, sign * temperature);
+                    addOrMerge(h, array, nameStart, nameEnd, sign * temperature);
                     temperature = 0;
                     sign = 1;
                     nameStart = bufferPosition;
@@ -256,107 +264,12 @@ public class ByteBufferLoadInThreads {
             } // end loop
             // If we get to the end and there is still data left, add it to the fragments as the start of the next block
             if (nameStart < limit) {
-                results.endFragment = Arrays.copyOfRange(array, nameStart, limit);
+                endFragment = Arrays.copyOfRange(array, nameStart, limit);
             }
             buffer.clear();
-            return results;
-        }
-    }
-
-
-    static class RowFragments {
-        byte[][] lineEnds = new byte[NUM_BLOCKS][];
-        byte[][] lineStarts = new byte[NUM_BLOCKS][];
-
-        byte[] getJoinedFragments(int number) {
-            // join the start and end fragments together
-            byte[] start = lineStarts[number];
-            byte[] end = lineEnds[number];
-            if (start == null && end == null) {
-                return null;
-            } else if (start == null) {
-                return end;
-            } else if (end == null) {
-                return start;
-            } else {
-                byte[] bufferToBuild = new byte[start.length + end.length];
-                System.arraycopy(start, 0, bufferToBuild, 0, start.length);
-                System.arraycopy(end, 0, bufferToBuild, start.length, end.length);
-                return bufferToBuild;
-            }
+            return this;
         }
 
-        // spare characters at the end of a block will be the start of a row in the next block.
-        public void storeFragments(ListOfCities resultToAdd) {
-            if (resultToAdd.endFragment != null) {
-                lineStarts[resultToAdd.blockNumber + 1] = resultToAdd.endFragment;
-            }
-            if (resultToAdd.startFragment != null) {
-                lineEnds[resultToAdd.blockNumber] = resultToAdd.startFragment;
-            }
-        }
-    }
-
-    static class Station {
-        public final byte[] name;
-        public int measurements;
-        public int total;
-        public int maxT;
-        public int minT;
-        public final int hash;
-
-        Station(byte[] name, int hash, int temp) {
-            this.name = name;
-            this.hash = hash;
-            this.total = temp;
-            this.measurements = 1;
-            this.minT = temp;
-            this.maxT = temp;
-        }
-
-        public void add_measurement(int temp) {
-            total += temp;
-            measurements++;
-            if (temp > maxT) {
-                maxT = temp;
-            }
-            if (temp < minT) {
-                minT = temp;
-            }
-        }
-
-        public void combine_results(Station city) {
-            measurements += city.measurements;
-            total += city.total;
-            if (city.maxT > maxT) {
-                maxT = city.maxT;
-            }
-            if (city.minT < minT) {
-                minT = city.minT;
-            }
-        }
-    }
-
-
-    // class which holds weather stations and updates them
-    // Array based 'map' which is only combined at the end
-    // Also holds the fragments for the current block which are read after each block
-    static class ListOfCities {
-
-        // larger values have fewer collisions but the increased array size takes longer to traverse
-        static final int HASH_SPACE = 8192;
-        static final int COLLISION = 2; // number of extra spaces needed for hash collisions
-        // decreasing the hash array size below 8192 means this needs increasing to at least 6
-        public Station[] records = new Station[HASH_SPACE + COLLISION];
-
-        // startFragment is at the start of the block (or the end of the previous block)
-        public byte[] startFragment;
-        public byte[] endFragment;
-        public int blockNumber;
-
-        public ListOfCities(int blockNumber) {
-            this.blockNumber = blockNumber;
-        }
 
         // Only called at the end on the line fragments.
         void addCity(byte[] array) {
@@ -496,8 +409,81 @@ public class ByteBufferLoadInThreads {
             throw new RuntimeException("Map Collision Error (merge/put)");
         }
     }
-}
 
+
+    static class RowFragments {
+        byte[][] lineEnds = new byte[NUM_BLOCKS][];
+        byte[][] lineStarts = new byte[NUM_BLOCKS][];
+
+        byte[] getJoinedFragments(int number) {
+            // join the start and end fragments together
+            byte[] start = lineStarts[number];
+            byte[] end = lineEnds[number];
+            if (start == null && end == null) {
+                return null;
+            } else if (start == null) {
+                return end;
+            } else if (end == null) {
+                return start;
+            } else {
+                byte[] bufferToBuild = new byte[start.length + end.length];
+                System.arraycopy(start, 0, bufferToBuild, 0, start.length);
+                System.arraycopy(end, 0, bufferToBuild, start.length, end.length);
+                return bufferToBuild;
+            }
+        }
+
+        // spare characters at the end of a block will be the start of a row in the next block.
+        public void storeFragments(ProcessData resultToAdd) {
+            if (resultToAdd.endFragment != null) {
+                lineStarts[resultToAdd.blockNumber + 1] = resultToAdd.endFragment;
+            }
+            if (resultToAdd.startFragment != null) {
+                lineEnds[resultToAdd.blockNumber] = resultToAdd.startFragment;
+            }
+        }
+    }
+
+    static class Station {
+        public final byte[] name;
+        public int measurements;
+        public int total;
+        public int maxT;
+        public int minT;
+        public final int hash;
+
+        Station(byte[] name, int hash, int temp) {
+            this.name = name;
+            this.hash = hash;
+            this.total = temp;
+            this.measurements = 1;
+            this.minT = temp;
+            this.maxT = temp;
+        }
+
+        public void add_measurement(int temp) {
+            total += temp;
+            measurements++;
+            if (temp > maxT) {
+                maxT = temp;
+            }
+            if (temp < minT) {
+                minT = temp;
+            }
+        }
+
+        public void combine_results(Station city) {
+            measurements += city.measurements;
+            total += city.total;
+            if (city.maxT > maxT) {
+                maxT = city.maxT;
+            }
+            if (city.minT < minT) {
+                minT = city.minT;
+            }
+        }
+    }
+}
 
 /**
  * Holds a byte array along with methods to add bytes and concatenate arrays.
