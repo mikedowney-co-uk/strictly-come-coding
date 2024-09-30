@@ -77,7 +77,7 @@ public class ByteBufferLoadInThreads {
             } // end for threads
         } // end while - no more data.
 //        System.out.println("blockNumber = " + blockNumber);
-        ListOfCities overallResults = new ListOfCities(0);
+        ListOfCities overallResults = null;
         // wait for threads to end and combine the results
         for (int i = 0; i < threads; i++) {
             if (runningThreads[i] != null) {
@@ -86,11 +86,16 @@ public class ByteBufferLoadInThreads {
                     fragmentStore.storeFragments(resultToAdd);
                 }
             }
-            ListOfCities resultsToAdd = processors[i].results;
-            // Merges a result set into the final ListOfCities.
-            for (Station s : resultsToAdd.records) {
-                if (s != null) {
-                    overallResults.mergeCity(s);
+            if (overallResults == null) {
+                overallResults = processors[i].results;
+            }
+            else {
+                ListOfCities resultsToAdd = processors[i].results;
+                // Merges a result set into the final ListOfCities.
+                for (Station s : resultsToAdd.records) {
+                    if (s != null) {
+                        overallResults.mergeCity(s);
+                    }
                 }
             }
             processors[i].close();
@@ -117,7 +122,7 @@ public class ByteBufferLoadInThreads {
         }
 
         Station city; // = new Station("Dummy".getBytes(), -1, 0);
-        int count = 0;
+//        int count = 0;
         for (Map.Entry<String, Station> e : sortedCities.entrySet()) {
             city = e.getValue();
             AppendableByteArray output = new AppendableByteArray();
@@ -134,7 +139,7 @@ public class ByteBufferLoadInThreads {
             System.out.print(e.getKey());
 //            System.out.printf(" (%d)", city.measurements);
             System.out.println(output.asString());
-            count += city.measurements;
+//            count += city.measurements;
         }
 //        System.out.println("length = " + sortedCities.size());
 //        System.out.println("count = " + count);
@@ -146,7 +151,7 @@ public class ByteBufferLoadInThreads {
     static byte[] numberToString(int number) {
         int length;
         byte[] bytes;
-        if (number < 0) { // eg. -9 (-0.9), -99 (-9.9), -999 (-99.9)
+        if (number < 0) {
             number = -number;  // negative
             if (number >= 100) {
                 length = 5;
