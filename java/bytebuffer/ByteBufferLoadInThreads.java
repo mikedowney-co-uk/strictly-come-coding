@@ -415,10 +415,11 @@ public class ByteBufferLoadInThreads {
         void addOrMerge(int key, byte[] buffer, int startIndex, int endIndex, int temperature) {
             int hash = key & (HASH_SPACE - 1);
             // Search forwards search for the entry or a gap
-            Station entry = records[hash];
+            Station[] r = records;
+            Station entry = r[hash];
             if (entry == null) {
                 byte[] nameArray = Arrays.copyOfRange(buffer, startIndex, endIndex);
-                records[hash] = new Station(nameArray, key, temperature);
+                r[hash] = new Station(nameArray, key, temperature);
                 return;
             }
             if (entry.hash == key) {
@@ -426,10 +427,10 @@ public class ByteBufferLoadInThreads {
                 return;
             }
 
-            entry = records[++hash];
+            entry = r[++hash];
             if (entry == null) {
                 byte[] nameArray = Arrays.copyOfRange(buffer, startIndex, endIndex);
-                records[hash] = new Station(nameArray, key, temperature);
+                r[hash] = new Station(nameArray, key, temperature);
                 return;
             }
 
@@ -438,10 +439,10 @@ public class ByteBufferLoadInThreads {
                 return;
             }
 
-            entry = records[++hash];
+            entry = r[++hash];
             if (entry == null) {
                 byte[] nameArray = Arrays.copyOfRange(buffer, startIndex, endIndex);
-                records[hash] = new Station(nameArray, key, temperature);
+                r[hash] = new Station(nameArray, key, temperature);
                 return;
             }
 
@@ -459,29 +460,29 @@ public class ByteBufferLoadInThreads {
             // add a city, or if already present combine two sets of measurements
             int h = city.hash;
             int hash = h & (HASH_SPACE - 1);
-
-            Station entry = records[hash];
+            Station[] r = records;
+            Station entry = r[hash];
             // Search forward looking for the city, merge if we find it, add it if we find a null
             if (entry == null) {
-                records[hash] = city;
+                r[hash] = city;
                 return;
             }
             if (entry.hash == h) {
                 entry.combine_results(city);
                 return;
             }
-            entry = records[++hash];
+            entry = r[++hash];
             if (entry == null) {
-                records[hash] = city;
+                r[hash] = city;
                 return;
             }
             if (entry.hash == h) {
                 entry.combine_results(city);
                 return;
             }
-            entry = records[++hash];
+            entry = r[++hash];
             if (entry == null) {
-                records[hash] = city;
+                r[hash] = city;
                 return;
             }
             if (entry.hash == h) {
