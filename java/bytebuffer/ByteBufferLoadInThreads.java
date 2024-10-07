@@ -64,12 +64,10 @@ public class ByteBufferLoadInThreads {
                     runningThreads[thread] = threadPoolExecutor.submit(p::process);
                 } else if (runningThreads[thread].isDone()) {
                     // thread finished, handle result.
-                    boolean areThereResults = (boolean) runningThreads[thread].get();
+                    weStillHaveData = (boolean) runningThreads[thread].get();
                     // Note: we re-use the ListOfCities, 1 per processor, so only collect at the end
-                    if (areThereResults) {
+                    if (weStillHaveData) {
                         RowFragments.storeFragments(p);
-                    } else {
-                        weStillHaveData = false;
                     }
                     runningThreads[thread] = null;
                 }
@@ -80,8 +78,7 @@ public class ByteBufferLoadInThreads {
             // remove the 'add' part of the 'add or merge' step in mergeCity()
             ProcessData overallResults = processors[0];
             if (runningThreads[0] != null) {
-                boolean isThreadFinished = (boolean) runningThreads[0].get();
-                if (isThreadFinished) {
+                if ((boolean) runningThreads[0].get()) {
                     RowFragments.storeFragments(processors[0]);
                 }
             }
@@ -90,8 +87,7 @@ public class ByteBufferLoadInThreads {
             for (int i = 1; i < threads; i++) {
                 ProcessData resultsToAdd = processors[i];
                 if (runningThreads[i] != null) {
-                    boolean isThreadFinished = (boolean)runningThreads[i].get();
-                    if (isThreadFinished) {
+                    if ((boolean)runningThreads[i].get()) {
                         RowFragments.storeFragments(resultsToAdd);
                     }
                 }
@@ -187,8 +183,6 @@ public class ByteBufferLoadInThreads {
 
         int blockNumber;
 
-//        ListOfCities results = new ListOfCities(blockNumber);
-
         // larger values have fewer collisions but the increased array size takes longer to traverse
         private static final int HASH_SPACE = 8192;
         private static final int COLLISION = 2; // number of extra spaces needed for hash collisions
@@ -222,13 +216,9 @@ public class ByteBufferLoadInThreads {
             byte[] array = buffer.array();
             int limit = buffer.limit();
 
-            // block number for the fragment collection
-            blockNumber = blockNumber;
-            endFragment = null;
-
             // Read up to the first newline and add it as a fragment (potential end of previous block)
-            int bufferPosition = -1;
-            byte b = array[++bufferPosition];
+            int bufferPosition = 0;
+            byte b = array[bufferPosition];
             while (b != '\n') {
                 b = array[++bufferPosition];
             }
@@ -270,6 +260,8 @@ public class ByteBufferLoadInThreads {
             // If we get to the end and there is still data left, add it to the fragments as the start of the next block
             if (nameStart < limit) {
                 endFragment = Arrays.copyOfRange(array, nameStart, limit);
+            } else {
+                endFragment = null;
             }
             buffer.clear();
             return true;
