@@ -44,20 +44,20 @@ public class ByteBufferLoadInThreads {
     private void go() throws Exception {
         final int threads = Runtime.getRuntime().availableProcessors();
 //        System.out.println("Using " + threads + " cores");
-
 //        System.out.println("Estimated number of blocks: " + NUM_BLOCKS);
-        ExecutorService threadPoolExecutor = Executors.newFixedThreadPool(threads);
         Future<?>[] runningThreads = new Future<?>[threads];
         ProcessData[] processors = new ProcessData[threads];
 
         for (int i = 0; i < threads; i++) {
             processors[i] = new ProcessData(ByteBuffer.allocate(BUFFERSIZE), i);
         }
-        boolean weStillHaveData = true;
-        int blockNumber = 0;
 
-        while (weStillHaveData) {
-            for (int thread = 0; thread < threads && weStillHaveData; thread++) {
+        try (ExecutorService threadPoolExecutor = Executors.newFixedThreadPool(threads)) {
+            boolean weStillHaveData = true;
+            int blockNumber = 0;
+
+            while (weStillHaveData) {
+                int thread = blockNumber % threads;
                 if (runningThreads[thread] == null) {
                     ProcessData p = processors[thread];
                     p.blockNumber = blockNumber++;
@@ -73,39 +73,46 @@ public class ByteBufferLoadInThreads {
                     }
                     runningThreads[thread] = null;
                 }
-            } // end for threads
-        } // end while - no more data.
+            } // end while - no more data.
 //        System.out.println("blockNumber = " + blockNumber);
 
-        ListOfCities overallResults = new ListOfCities(0);
-        // wait for threads to end and combine the results
-        for (int i = 0; i < threads; i++) {
-            if (runningThreads[i] != null) {
-                ListOfCities resultToAdd = (ListOfCities) runningThreads[i].get();
+            // If we put the first thread directly into overallResults, we can
+            // remove the 'add' part of the 'add or merge' step in mergeCity()
+            ListOfCities overallResults = processors[0].results;
+            if (runningThreads[0] != null) {
+                ListOfCities resultToAdd = (ListOfCities) runningThreads[0].get();
                 if (resultToAdd != null) {
                     RowFragments.storeFragments(resultToAdd);
                 }
             }
-            ListOfCities resultsToAdd = processors[i].results;
-            // Merges a result set into the final ListOfCities.
-            for (Station s : resultsToAdd.records) {
-                if (s != null) {
-                    overallResults.mergeCity(s);
+
+            // wait for threads to end and combine the results
+            for (int i = 1; i < threads; i++) {
+                if (runningThreads[i] != null) {
+                    ListOfCities resultToAdd = (ListOfCities) runningThreads[i].get();
+                    if (resultToAdd != null) {
+                        RowFragments.storeFragments(resultToAdd);
+                    }
+                }
+                ListOfCities resultsToAdd = processors[i].results;
+                // Merges a result set into the final ListOfCities.
+                for (Station s : resultsToAdd.records) {
+                    if (s != null) {
+                        overallResults.mergeCity(s);
+                    }
+                }
+                processors[i].close();
+            }
+
+            // add the fragments into the results now.
+            for (int f = 0; f < NUM_BLOCKS; f++) {
+                byte[] line = RowFragments.getJoinedFragments(f);
+                if (line != null) {
+                    overallResults.addCity(line);
                 }
             }
-            processors[i].close();
+            sortAndDisplay(overallResults);
         }
-
-        // add the fragments into the results now.
-        for (int f = 0; f < NUM_BLOCKS; f++) {
-            byte[] line = RowFragments.getJoinedFragments(f);
-            if (line != null) {
-                overallResults.addCity(line);
-            }
-        }
-        sortAndDisplay(overallResults);
-        threadPoolExecutor.shutdown();
-        threadPoolExecutor.close();
     }
 
     private static void sortAndDisplay(ListOfCities overallResults) {
@@ -357,7 +364,7 @@ public class ByteBufferLoadInThreads {
         private void addCity(byte[] array) {
             int tempStart = 0;
             int tempEnd = 0;
-            // Split the line into name and temperature
+            // Split the line into name and temperature and calculate the hash on the name
             int hashCode = 0;
             for (int i = 0; i < array.length; i++) {
                 byte b = array[i];
@@ -390,63 +397,63 @@ public class ByteBufferLoadInThreads {
                 }
             }
 
-            // gamble - we will already have seen all the station codes during the block.
-            // use a shortcut merge which only considers hashCode and expects the values to be there
+            // assume we have already seen all the station codes during the block.
+            // merge with an existing station, don't try to add a new one.
             int hash = hashCode & (HASH_SPACE - 1);
             Station entry = records[hash];
             if (entry.hash == hashCode) {
-                records[hash].add_measurement(temp);
+                entry.add_measurement(temp);
                 return;
             }
             entry = records[++hash];
             if (entry.hash == hashCode) {
-                records[hash].add_measurement(temp);
+                entry.add_measurement(temp);
                 return;
             }
             entry = records[++hash];
             if (entry.hash == hashCode) {
-                records[hash].add_measurement(temp);
+                entry.add_measurement(temp);
                 return;
             }
             throw new RuntimeException("Hash code not present in array");
         }
 
         // Called during the main processing loop
-        private void addOrMerge(int key, byte[] buffer, int startIndex, int endIndex, int temperature) {
-            int hash = key & (HASH_SPACE - 1);
+        private void addOrMerge(int nameHash, byte[] buffer, int startIndex, int endIndex, int temperature) {
+            int key = nameHash & (HASH_SPACE - 1);
             // Search forwards search for the entry or a gap
             Station[] r = records;
-            Station entry = r[hash];
+            Station entry = r[key];
             if (entry == null) {
                 byte[] nameArray = Arrays.copyOfRange(buffer, startIndex, endIndex);
-                r[hash] = new Station(nameArray, key, temperature);
+                r[key] = new Station(nameArray, nameHash, temperature);
                 return;
             }
-            if (entry.hash == key) {
+            if (entry.hash == nameHash) {
                 entry.add_measurement(temperature);
                 return;
             }
 
-            entry = r[++hash];
+            entry = r[++key];
             if (entry == null) {
                 byte[] nameArray = Arrays.copyOfRange(buffer, startIndex, endIndex);
-                r[hash] = new Station(nameArray, key, temperature);
+                r[key] = new Station(nameArray, nameHash, temperature);
                 return;
             }
 
-            if (entry.hash == key) {
+            if (entry.hash == nameHash) {
                 entry.add_measurement(temperature);
                 return;
             }
 
-            entry = r[++hash];
+            entry = r[++key];
             if (entry == null) {
                 byte[] nameArray = Arrays.copyOfRange(buffer, startIndex, endIndex);
-                r[hash] = new Station(nameArray, key, temperature);
+                r[key] = new Station(nameArray, nameHash, temperature);
                 return;
             }
 
-            if (entry.hash == key) {
+            if (entry.hash == nameHash) {
                 entry.add_measurement(temperature);
                 return;
             }
@@ -455,36 +462,23 @@ public class ByteBufferLoadInThreads {
         }
 
 
-        // Called during the final data merging and during the fragment processing
+        // Only called during the final data combining
         private void mergeCity(Station city) {
-            // add a city, or if already present combine two sets of measurements
             int h = city.hash;
             int hash = h & (HASH_SPACE - 1);
             Station[] r = records;
             Station entry = r[hash];
-            // Search forward looking for the city, merge if we find it, add it if we find a null
-            if (entry == null) {
-                r[hash] = city;
-                return;
-            }
+            // Search forward looking for the city, merge if we find it.
             if (entry.hash == h) {
                 entry.combine_results(city);
                 return;
             }
             entry = r[++hash];
-            if (entry == null) {
-                r[hash] = city;
-                return;
-            }
             if (entry.hash == h) {
                 entry.combine_results(city);
                 return;
             }
             entry = r[++hash];
-            if (entry == null) {
-                r[hash] = city;
-                return;
-            }
             if (entry.hash == h) {
                 entry.combine_results(city);
                 return;
