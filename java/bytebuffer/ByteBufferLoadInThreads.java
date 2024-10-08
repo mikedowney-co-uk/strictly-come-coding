@@ -45,8 +45,8 @@ public class ByteBufferLoadInThreads {
         final int threads = Runtime.getRuntime().availableProcessors();
 //        System.out.println("Using " + threads + " cores");
 //        System.out.println("Estimated number of blocks: " + NUM_BLOCKS);
-        Future<?>[] runningThreads = new Future<?>[threads];
-        ProcessData[] processors = new ProcessData[threads];
+        final Future<?>[] runningThreads = new Future<?>[threads];
+        final ProcessData[] processors = new ProcessData[threads];
 
         for (int i = 0; i < threads; i++) {
             processors[i] = new ProcessData(ByteBuffer.allocate(BUFFERSIZE), i);
@@ -64,13 +64,8 @@ public class ByteBufferLoadInThreads {
                     runningThreads[thread] = threadPoolExecutor.submit(p::process);
                 } else if (runningThreads[thread].isDone()) {
                     // thread finished, handle result.
-                    ListOfCities resultToAdd = (ListOfCities) runningThreads[thread].get();
                     // Note: we re-use the ListOfCities, 1 per processor, so only collect at the end
-                    if (resultToAdd != null) {
-                        RowFragments.storeFragments(resultToAdd);
-                    } else {
-                        weStillHaveData = false;
-                    }
+                    weStillHaveData = RowFragments.storeFragments((ListOfCities) runningThreads[thread].get());
                     runningThreads[thread] = null;
                 }
             } // end while - no more data.
@@ -80,19 +75,13 @@ public class ByteBufferLoadInThreads {
             // remove the 'add' part of the 'add or merge' step in mergeCity()
             ListOfCities overallResults = processors[0].results;
             if (runningThreads[0] != null) {
-                ListOfCities resultToAdd = (ListOfCities) runningThreads[0].get();
-                if (resultToAdd != null) {
-                    RowFragments.storeFragments(resultToAdd);
-                }
+                    RowFragments.storeFragments((ListOfCities) runningThreads[0].get());
             }
 
             // wait for threads to end and combine the results
             for (int i = 1; i < threads; i++) {
                 if (runningThreads[i] != null) {
-                    ListOfCities resultToAdd = (ListOfCities) runningThreads[i].get();
-                    if (resultToAdd != null) {
-                        RowFragments.storeFragments(resultToAdd);
-                    }
+                    RowFragments.storeFragments((ListOfCities) runningThreads[i].get());
                 }
                 ListOfCities resultsToAdd = processors[i].results;
                 // Merges a result set into the final ListOfCities.
@@ -289,13 +278,17 @@ public class ByteBufferLoadInThreads {
         }
 
         // spare characters at the end of a block will be the start of a row in the next block.
-        private static void storeFragments(ListOfCities resultToAdd) {
+        private static boolean storeFragments(ListOfCities resultToAdd) {
+            if (resultToAdd == null) {
+                return false;
+            }
             if (resultToAdd.endFragment != null) {
                 lineStarts[resultToAdd.blockNumber + 1] = resultToAdd.endFragment;
             }
             if (resultToAdd.startFragment != null) {
                 lineEnds[resultToAdd.blockNumber] = resultToAdd.startFragment;
             }
+            return true;
         }
     }
 
