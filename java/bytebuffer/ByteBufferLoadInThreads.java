@@ -58,17 +58,14 @@ public class ByteBufferLoadInThreads {
 
             while (weStillHaveData) {
                 int thread = blockNumber % threads;
-                ProcessData p = processors[thread];
                 if (runningThreads[thread] == null) {
+                    ProcessData p = processors[thread];
                     p.blockNumber = blockNumber++;
                     runningThreads[thread] = threadPoolExecutor.submit(p::process);
                 } else if (runningThreads[thread].isDone()) {
                     // thread finished, handle result.
                     weStillHaveData = (boolean) runningThreads[thread].get();
-                    // Note: we re-use the ListOfCities, 1 per processor, so only collect at the end
-                    if (weStillHaveData) {
-                        RowFragments.storeFragments(p);
-                    }
+                    RowFragments.storeFragments(processors[thread]);
                     runningThreads[thread] = null;
                 }
             } // end while - no more data.
@@ -83,7 +80,7 @@ public class ByteBufferLoadInThreads {
                 }
             }
 
-            // wait for threads to end and combine the results
+            // wait for the other threads to end and combine the results
             for (int i = 1; i < threads; i++) {
                 ProcessData resultsToAdd = processors[i];
                 if (runningThreads[i] != null) {
@@ -108,7 +105,7 @@ public class ByteBufferLoadInThreads {
                 }
             }
             sortAndDisplay(overallResults);
-        }
+        } // end of try with resources block
     }
 
     private static void sortAndDisplay(ProcessData overallResults) {
@@ -208,8 +205,9 @@ public class ByteBufferLoadInThreads {
 
         private boolean process() throws IOException {
             channel.position((long) blockNumber * BUFFERSIZE);
-            int status = channel.read(buffer);
-            if (status == -1) {
+            if (channel.read(buffer) == -1) {
+                startFragment = null;
+                endFragment = null;
                 return false;
             }
             buffer.flip();
@@ -241,7 +239,7 @@ public class ByteBufferLoadInThreads {
                     nameEnd = bufferPosition - 1;
                 } else if (readingName) {
                     h = 31 * h + b; // calculate the hash of the name
-                } else if (b != '\n') { // only consider chr=13 as newline while reading numbers
+                } else if (b != '\n') {
                     if (b == '-') {
                         sign = -1;
                     } else if (b != '.') {
