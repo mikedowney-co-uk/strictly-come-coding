@@ -16,7 +16,9 @@ import java.util.concurrent.*;
 /**
  * Reads the file into a set of ByteBuffers
  * Use byte arrays instead of Strings for the City names.
- * Used the array-backed map
+ * Uses the array-backed map instead of a HashMap
+ * Developed using Java 21. Older versions may need the try-with-resources modifying since
+ * ExecutorService may not be autoclosable.
  * <p>
  * Add -ea to VM options to enable the asserts.
  */
@@ -27,7 +29,6 @@ public class ByteBufferLoadInThreads {
     private static final int BUFFERSIZE = 1024 * 1024;
 
     private static int NUM_BLOCKS;
-
 
     public static void main(String[] args) throws Exception {
         long startTime = System.currentTimeMillis();
@@ -40,7 +41,7 @@ public class ByteBufferLoadInThreads {
 
     // All the blocks of code which were separate methods have now been inlined.
     // That wasn't to save time of itself but it meant I could move from instance
-    // variables to local variables, which is noticeably faster.
+    // variables to local variables, which are noticeably faster.
     private void go() throws Exception {
         final int threads = Runtime.getRuntime().availableProcessors();
 //        System.out.println("Using " + threads + " cores");
@@ -84,7 +85,7 @@ public class ByteBufferLoadInThreads {
             for (int i = 1; i < threads; i++) {
                 ProcessData resultsToAdd = processors[i];
                 if (runningThreads[i] != null) {
-                    if ((boolean)runningThreads[i].get()) {
+                    if ((boolean) runningThreads[i].get()) {
                         RowFragments.storeFragments(resultsToAdd);
                     }
                 }
@@ -123,8 +124,7 @@ public class ByteBufferLoadInThreads {
             AppendableByteArray output = new AppendableByteArray();
             output.addDelimiter();
             output.appendArray(numberToString(city.minT));
-            output.addDelimiter();
-            output.appendArray(String.format("%.1f;", city.total / (city.measurements * 10.0)).getBytes(StandardCharsets.UTF_8));
+            output.appendArray(String.format("/%.1f/", city.total / (city.measurements * 10.0)).getBytes(StandardCharsets.UTF_8));
 //            System.out.printf("%s;%s;%.1f;%s\n",
 //                    e.getKey(), new String(numberToString(city.minT), StandardCharsets.UTF_8),
 //                    city.total / (city.measurements * 10.0),
@@ -171,7 +171,7 @@ public class ByteBufferLoadInThreads {
         return bytes;
     }
 
-    // one instance per thread.
+    // one instance per thread, reused.
     static class ProcessData {
 
         private final ByteBuffer buffer;
@@ -368,7 +368,7 @@ public class ByteBufferLoadInThreads {
         }
 
 
-        // Only called during the final data combining
+        // Only called during the final data combining.
         private void mergeCity(Station city) {
             int h = city.hash;
             int hash = h & (HASH_SPACE - 1);
@@ -448,8 +448,7 @@ public class ByteBufferLoadInThreads {
             measurements++;
             if (temp > maxT) {
                 maxT = temp;
-            }
-            if (temp < minT) {
+            } else if (temp < minT) {
                 minT = temp;
             }
         }
@@ -467,6 +466,7 @@ public class ByteBufferLoadInThreads {
     }
 
 }
+
 /**
  * Holds a byte array along with methods to add bytes and concatenate arrays.
  * Only used at the end, joining fragments and preparing output.
@@ -510,7 +510,7 @@ class AppendableByteArray {
     }
 
     public void addDelimiter() {
-        buffer[length++] = ';';
+        buffer[length++] = '=';
     }
 
     public void appendArray(byte[] bytes) {
