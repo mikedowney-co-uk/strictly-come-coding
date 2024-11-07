@@ -56,10 +56,10 @@ public class ByteBufferLoadInThreads {
         try (ExecutorService threadPoolExecutor = Executors.newFixedThreadPool(threads)) {
             boolean weStillHaveData = true;
             int blockNumber = 0;
+            int thread = 0;
 
             while (weStillHaveData) {
-                int thread = blockNumber % threads;
-                if (runningThreads[thread] == null) {
+                if (runningThreads[thread] == null) {  // the thread finished so we can give it the next block
                     ProcessData p = processors[thread];
                     p.blockNumber = blockNumber++;
                     runningThreads[thread] = threadPoolExecutor.submit(p::process);
@@ -69,10 +69,11 @@ public class ByteBufferLoadInThreads {
                     RowFragments.storeFragments(processors[thread]);
                     runningThreads[thread] = null;
                 }
+                thread = (thread + 1) % threads;
             } // end while - no more data.
 //        System.out.println("blockNumber = " + blockNumber);
 
-            // If we put the first thread directly into overallResults, we can
+            // If we put the first thread results directly into overallResults, we can
             // remove the 'add' part of the 'add or merge' step in mergeCity()
             ProcessData overallResults = processors[0];
             if (runningThreads[0] != null) {
@@ -117,7 +118,7 @@ public class ByteBufferLoadInThreads {
             }
         }
 
-        Station city; // = new Station("Dummy".getBytes(), -1, 0);
+        Station city;
         int count = 0;
         for (Map.Entry<String, Station> e : sortedCities.entrySet()) {
             city = e.getValue();
@@ -125,14 +126,9 @@ public class ByteBufferLoadInThreads {
             output.addDelimiter();
             output.appendArray(numberToString(city.minT));
             output.appendArray(String.format("/%.1f/", city.total / (city.measurements * 10.0)).getBytes(StandardCharsets.UTF_8));
-//            System.out.printf("%s;%s;%.1f;%s\n",
-//                    e.getKey(), new String(numberToString(city.minT), StandardCharsets.UTF_8),
-//                    city.total / (city.measurements * 10.0),
-//                    new String(numberToString(city.maxT), StandardCharsets.UTF_8));
 
             output.appendArray(numberToString(city.maxT));
             System.out.print(e.getKey());
-//            System.out.printf(" (%d)", city.measurements);
             System.out.println(output.asString());
             count += city.measurements;
         }
@@ -327,7 +323,7 @@ public class ByteBufferLoadInThreads {
         // Called during the main processing loop
         private void addOrMerge(int nameHash, byte[] buffer, int startIndex, int endIndex, int temperature) {
             int key = nameHash & (HASH_SPACE - 1);
-            // Search forwards search for the entry or a gap
+            // Search forwards look for the entry or a gap
             Station[] r = records;
             Station entry = r[key];
             if (entry == null) {
@@ -363,7 +359,7 @@ public class ByteBufferLoadInThreads {
                 entry.add_measurement(temperature);
                 return;
             }
-            // don't fail silently, fail kicking and screaming if we can't store the value.
+            // don't fail silently, fail kicking and screaming if we get too many hash collisions.
             throw new RuntimeException("Map Collision Error (merge)");
         }
 
